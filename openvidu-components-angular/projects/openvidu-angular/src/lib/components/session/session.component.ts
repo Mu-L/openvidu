@@ -23,7 +23,7 @@ import {
 	StreamEvent,
 	StreamPropertyChangedEvent,
 	Subscriber
-} from 'openvidu-browser';
+} from 'openvidu-browser-v2compatibility';
 
 import { ILogger } from '../../models/logger.model';
 import { VideoType } from '../../models/video-type.model';
@@ -79,7 +79,7 @@ export class SessionComponent implements OnInit, OnDestroy {
 	protected readonly SIDENAV_WIDTH_LIMIT_MODE = 790;
 	protected menuSubscription: Subscription;
 	protected layoutWidthSubscription: Subscription;
-	protected updateLayoutInterval: NodeJS.Timer;
+	protected updateLayoutInterval: NodeJS.Timeout;
 	private captionLanguageSubscription: Subscription;
 	protected log: ILogger;
 

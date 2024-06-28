@@ -17,11 +17,11 @@ import { RecordingDialogData } from '../../models/dialog.model';
 	`,
 	styles: [
 		`
-			video {
-				max-height: 64vh;
-				max-width: 100%;
-			}
-		`
+  			video {
+  				max-height: 64vh;
+  				max-width: 100%;
+  			}
+  		`
 	]
 })
 export class RecordingDialogComponent {

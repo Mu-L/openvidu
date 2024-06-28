@@ -7,7 +7,7 @@
 .nickname {
 	padding: 0px;
 	position: absolute;
-	z-index: 999;
+	z-index: 9999;
 	border-radius: var(--ov-video-radius);
 	color: var(--ov-text-color);
 	font-family: 'Roboto', 'RobotoDraft', Helvetica, Arial, sans-serif;
@@ -39,12 +39,21 @@
 #audio-wave-container {
 	position: absolute;
 	right: 0;
-	z-index: 2;
+	z-index: 9999;
 	padding: 5px;
 }
 
 .fullscreen {
 	top: 40px;
+}
+
+.video-settings-btn mat-icon {
+	position: absolute;
+	top: 5px;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	margin: auto;
 }
 
 video {
@@ -84,7 +93,7 @@ video {
 	background-color: var(--ov-warn-color);
 }
 
-.status-icons .mat-icon-button,
+.status-icons .mat-mdc-icon-button,
 #settings-container .mat-icon-button {
 	line-height: 0px;
 }
@@ -92,6 +101,12 @@ video {
 .status-icons mat-icon,
 #settings-container mat-icon {
 	font-size: 18px;
+	position: absolute;
+	top: 5px;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	margin: auto;
 }
 
 #settings-container {
