@@ -9,7 +9,9 @@ import { Component, Input } from '@angular/core';
 	template: `
 		<div class="poster" id="video-poster">
 			<div class="initial" [ngStyle]="{ 'background-color': color }">
-				<span id="poster-text">{{ letter }}</span>
+				@if (letter) {
+					<span id="poster-text">{{ letter }}</span>
+				}
 			</div>
 		</div>
 	`,
