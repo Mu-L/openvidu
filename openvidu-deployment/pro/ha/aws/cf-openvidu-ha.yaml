@@ -1719,11 +1719,24 @@ Resources:
                 # Comma-separated 1-4: must match installer's --master-node-private-ip-list format
                 MASTER_NODE_PRIVATE_IP_LIST="$MASTER_NODE_1_PRIVATE_IP,$MASTER_NODE_2_PRIVATE_IP,$MASTER_NODE_3_PRIVATE_IP,$MASTER_NODE_4_PRIVATE_IP"
 
-                # Re-read: other (non-IP) values still come from the shared secret
-                SHARED_SECRET=$(aws secretsmanager get-secret-value \
-                  --region ${AWS::Region} \
-                  --secret-id openvidu-ha-${AWS::Region}-${AWS::StackName} \
-                  --query SecretString --output text)
+                # Re-read: other (non-IP) values still come from the shared secret.
+                # GetSecretValue is eventually consistent: retry until a read returns the generated values
+                SECRET_READ_ATTEMPTS=0
+                while true; do
+                  SHARED_SECRET=$(aws secretsmanager get-secret-value \
+                    --region ${AWS::Region} \
+                    --secret-id openvidu-ha-${AWS::Region}-${AWS::StackName} \
+                    --query SecretString --output text)
+                  if echo "$SHARED_SECRET" | jq -e '(.ALL_SECRETS_GENERATED == "true") and ([.DOMAIN_NAME, .OPENVIDU_VERSION, .REDIS_PASSWORD, .MONGO_ADMIN_PASSWORD, .MONGO_REPLICA_SET_KEY, .MINIO_SECRET_KEY, .DASHBOARD_ADMIN_PASSWORD, .GRAFANA_ADMIN_PASSWORD, .LIVEKIT_API_KEY, .LIVEKIT_API_SECRET] | all(. != "none"))' > /dev/null; then
+                    break
+                  fi
+                  SECRET_READ_ATTEMPTS=$((SECRET_READ_ATTEMPTS + 1))
+                  if [[ $SECRET_READ_ATTEMPTS -ge 60 ]]; then
+                    echo "Error: shared secret still incomplete after 5 minutes of stale reads"
+                    exit 1
+                  fi
+                  sleep 5
+                done
 
                 DOMAIN=$(echo "$SHARED_SECRET" | jq -r '.DOMAIN_NAME')
                 OPENVIDU_PRO_LICENSE=$(echo "$SHARED_SECRET" | jq -r '.OPENVIDU_PRO_LICENSE')
@@ -2476,8 +2489,8 @@ Resources:
                 SECRETS_WAIT_ATTEMPTS=0
                 SECRETS_WAIT_MAX=360
                 while true; do
-                  ALL_SECRETS_GENERATED=$(echo "$SHARED_SECRET" | jq -r '.ALL_SECRETS_GENERATED')
-                  if [[ "$ALL_SECRETS_GENERATED" == "true" ]]; then
+                  # Validate content, not just the flag: stale eventually-consistent reads can return pre-generation values
+                  if echo "$SHARED_SECRET" | jq -e '(.ALL_SECRETS_GENERATED == "true") and (.OPENVIDU_VERSION != "none") and (.REDIS_PASSWORD != "none")' > /dev/null; then
                     break
                   fi
                   SECRETS_WAIT_ATTEMPTS=$((SECRETS_WAIT_ATTEMPTS + 1))
