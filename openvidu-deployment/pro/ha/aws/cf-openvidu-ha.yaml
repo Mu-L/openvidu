@@ -1242,13 +1242,38 @@ Resources:
           "GRAFANA_ADMIN_USERNAME": "none",
           "GRAFANA_ADMIN_PASSWORD": "none",
           "ENABLED_MODULES": "none",
-          "MASTER_NODE_1_PRIVATE_IP": "none",
-          "MASTER_NODE_2_PRIVATE_IP": "none",
-          "MASTER_NODE_3_PRIVATE_IP": "none",
-          "MASTER_NODE_4_PRIVATE_IP": "none",
           "OPENVIDU_VERSION": "none",
           "ALL_SECRETS_GENERATED": "false"
         }
+
+  # One SSM parameter per master: atomic per-key writes
+  MasterNode1PrivateIpParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /openvidu/${AWS::StackName}/master-node-1-private-ip
+      Type: String
+      Value: "none"
+
+  MasterNode2PrivateIpParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /openvidu/${AWS::StackName}/master-node-2-private-ip
+      Type: String
+      Value: "none"
+
+  MasterNode3PrivateIpParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /openvidu/${AWS::StackName}/master-node-3-private-ip
+      Type: String
+      Value: "none"
+
+  MasterNode4PrivateIpParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /openvidu/${AWS::StackName}/master-node-4-private-ip
+      Type: String
+      Value: "none"
 
   S3AppDataBucketResource:
     Type: 'AWS::S3::Bucket'
@@ -1281,8 +1306,7 @@ Resources:
     Condition: CreateClusterDataBucket
 
   # -------------------------
-  # Preprocess subnets to allocate Volumes and ENIs across Availability Zones
-  # For OpenVidu Master Nodes
+  # Normalize the master node subnet list to exactly 4 entries, one per OpenVidu Master Node
   # -------------------------
   SubnetProcessorFunction:
     Type: AWS::Lambda::Function
@@ -1293,13 +1317,11 @@ Resources:
       Code:
         ZipFile: |
           import cfnresponse
-          import boto3
 
           def lambda_handler(event, context):
               try:
                   # Process event data
                   subnets = event['ResourceProperties']['Subnets']
-                  ec2 = boto3.client('ec2')
 
                   # Ensure we have at least four subnets by cycling through the available subnets
                   subnets = (subnets * 4)[:4]  # Repeat the list to have at least 4 elements and then take the first 4
@@ -1355,10 +1377,6 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/SubnetProcessor-${AWS::Region}-${AWS::StackName}:*'
-              - Effect: Allow
-                Action:
-                  - ec2:DescribeSubnets
-                Resource: '*'
 
   OpenViduMasterNodeRole:
     Type: AWS::IAM::Role
@@ -1390,6 +1408,11 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:UpdateSecret
                 Resource: !Ref OpenViduSharedInfo
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/openvidu/${AWS::StackName}/*
               - Fn::If:
                 - CreateRecordingsBucket
                 - Effect: Allow
@@ -1476,6 +1499,10 @@ Resources:
                 Resource: !Ref OpenViduSharedInfo
               - Effect: Allow
                 Action:
+                  - ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/openvidu/${AWS::StackName}/*
+              - Effect: Allow
+                Action:
                   - autoscaling:SetInstanceHealth
                   - autoscaling:CompleteLifecycleAction
                   - autoscaling:RecordLifecycleActionHeartbeat
@@ -1526,8 +1553,6 @@ Resources:
 
   OpenViduMediaInstanceProfile:
     Type: AWS::IAM::InstanceProfile
-    DependsOn:
-         - MasterNodesWaitCondition4
     Properties:
       InstanceProfileName: !Sub OpenViduMediaInstanceProfile-${AWS::Region}-${AWS::StackName}
       Roles:
@@ -1566,41 +1591,14 @@ Resources:
                   rm -rf awscliv2.zip aws
                 fi
 
-                # Singal to notify instance is waiting
+                # Signal to notify instance is waiting
                 SIGNAL_NAME="$1"
+
+                # Exported earlier in this instance's UserData
+                MASTER_NODE_NUM="${!MASTER_NODE_NUM}"
 
                 # Token for IMDSv2
                 TOKEN="$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")"
-
-                # Subnets IDs
-                SUBNETS=(
-                  "${SubnetProcessor.Subnet1}"
-                  "${SubnetProcessor.Subnet2}"
-                  "${SubnetProcessor.Subnet3}"
-                  "${SubnetProcessor.Subnet4}"
-                )
-
-                MAC_ADDRESS="$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254//latest/meta-data/mac)"
-                SUBNET_ID="$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s "http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC_ADDRESS/subnet-id")"
-
-                # Check master node number
-                MASTER_NODE_NUM=1
-                for subnet in "${!SUBNETS[@]}"; do
-                  if [[ "$subnet" == "$SUBNET_ID" ]]; then
-
-                    SHARED_SECRET=$(aws secretsmanager get-secret-value \
-                      --region ${AWS::Region} \
-                      --secret-id openvidu-ha-${AWS::Region}-${AWS::StackName} \
-                      --query SecretString --output text || echo 'none')
-
-                      # Check if current master node is reacheable with ping
-                      ACUTAL_MASTER_NODE_IP=$(echo "$SHARED_SECRET" | jq -r ".MASTER_NODE_${!MASTER_NODE_NUM}_PRIVATE_IP")
-                      if [[ "$ACUTAL_MASTER_NODE_IP" == "none" ]]; then
-                        break
-                      fi
-                  fi
-                  MASTER_NODE_NUM=$((MASTER_NODE_NUM + 1))
-                done
 
                 # Get own private IP
                 PRIVATE_IP="$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/local-ipv4)"
@@ -1610,8 +1608,12 @@ Resources:
                   exit 1
                 fi
 
-                # Store current private IP
-                /usr/local/bin/store_secret.sh save MASTER_NODE_${!MASTER_NODE_NUM}_PRIVATE_IP "${!PRIVATE_IP}"
+                aws ssm put-parameter \
+                  --region ${AWS::Region} \
+                  --name "/openvidu/${AWS::StackName}/master-node-${!MASTER_NODE_NUM}-private-ip" \
+                  --value "${!PRIVATE_IP}" \
+                  --type String \
+                  --overwrite > /dev/null
 
                 SHARED_SECRET=$(aws secretsmanager get-secret-value \
                   --region ${AWS::Region} \
@@ -1690,38 +1692,38 @@ Resources:
                 # sending the signal call
                 cfn-signal -e $? --stack ${AWS::StackId} --resource "$SIGNAL_NAME" --region ${AWS::Region}
 
-                # Wait for all master nodes to store their private IPs
+                IP_WAIT_ATTEMPTS=0
+                IP_WAIT_MAX=360
                 while true; do
-                  SHARED_SECRET=$(aws secretsmanager get-secret-value \
-                    --region ${AWS::Region} \
-                    --secret-id openvidu-ha-${AWS::Region}-${AWS::StackName} \
-                    --query SecretString --output text || echo 'none')
+                  MASTER_NODE_1_PRIVATE_IP=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-1-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+                  MASTER_NODE_2_PRIVATE_IP=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-2-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+                  MASTER_NODE_3_PRIVATE_IP=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-3-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+                  MASTER_NODE_4_PRIVATE_IP=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-4-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
 
-                  MASTER_NODE_1_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_1_PRIVATE_IP')
-                  MASTER_NODE_2_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_2_PRIVATE_IP')
-                  MASTER_NODE_3_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_3_PRIVATE_IP')
-                  MASTER_NODE_4_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_4_PRIVATE_IP')
-
-                  # Check if all master nodes have stored their private IPs
-                  if [[ "$MASTER_NODE_1_PRIVATE_IP" != "none" ]] &&
-                      [[ "$MASTER_NODE_2_PRIVATE_IP" != "none" ]] &&
-                      [[ "$MASTER_NODE_3_PRIVATE_IP" != "none" ]] &&
-                      [[ "$MASTER_NODE_4_PRIVATE_IP" != "none" ]]; then
+                  # Check if all master nodes have published their private IPs
+                  if [[ "$MASTER_NODE_1_PRIVATE_IP" != "none" ]] && [[ -n "$MASTER_NODE_1_PRIVATE_IP" ]] &&
+                      [[ "$MASTER_NODE_2_PRIVATE_IP" != "none" ]] && [[ -n "$MASTER_NODE_2_PRIVATE_IP" ]] &&
+                      [[ "$MASTER_NODE_3_PRIVATE_IP" != "none" ]] && [[ -n "$MASTER_NODE_3_PRIVATE_IP" ]] &&
+                      [[ "$MASTER_NODE_4_PRIVATE_IP" != "none" ]] && [[ -n "$MASTER_NODE_4_PRIVATE_IP" ]]; then
                     break
+                  fi
+
+                  IP_WAIT_ATTEMPTS=$((IP_WAIT_ATTEMPTS + 1))
+                  if [[ $IP_WAIT_ATTEMPTS -ge $IP_WAIT_MAX ]]; then
+                    echo "Error: timed out after 30 minutes waiting for all master nodes to publish their private IPs to SSM"
+                    exit 1
                   fi
                   sleep 5
                 done
 
+                # Comma-separated 1-4: must match installer's --master-node-private-ip-list format
+                MASTER_NODE_PRIVATE_IP_LIST="$MASTER_NODE_1_PRIVATE_IP,$MASTER_NODE_2_PRIVATE_IP,$MASTER_NODE_3_PRIVATE_IP,$MASTER_NODE_4_PRIVATE_IP"
+
+                # Re-read: other (non-IP) values still come from the shared secret
                 SHARED_SECRET=$(aws secretsmanager get-secret-value \
                   --region ${AWS::Region} \
                   --secret-id openvidu-ha-${AWS::Region}-${AWS::StackName} \
                   --query SecretString --output text)
-
-                MASTER_NODE_1_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_1_PRIVATE_IP')
-                MASTER_NODE_2_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_2_PRIVATE_IP')
-                MASTER_NODE_3_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_3_PRIVATE_IP')
-                MASTER_NODE_4_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_4_PRIVATE_IP')
-                MASTER_NODE_PRIVATE_IP_LIST="$MASTER_NODE_1_PRIVATE_IP,$MASTER_NODE_2_PRIVATE_IP,$MASTER_NODE_3_PRIVATE_IP,$MASTER_NODE_4_PRIVATE_IP"
 
                 DOMAIN=$(echo "$SHARED_SECRET" | jq -r '.DOMAIN_NAME')
                 OPENVIDU_PRO_LICENSE=$(echo "$SHARED_SECRET" | jq -r '.OPENVIDU_PRO_LICENSE')
@@ -1738,18 +1740,22 @@ Resources:
                 GRAFANA_ADMIN_PASSWORD=$(echo "$SHARED_SECRET" | jq -r '.GRAFANA_ADMIN_PASSWORD')
                 MEET_INITIAL_ADMIN_USER=$(echo "$SHARED_SECRET" | jq -r '.MEET_INITIAL_ADMIN_USER')
                 MEET_INITIAL_ADMIN_PASSWORD=$(echo "$SHARED_SECRET" | jq -r '.MEET_INITIAL_ADMIN_PASSWORD')
+                MEET_INITIAL_API_KEY=""
                 if [[ "${InitialMeetApiKey}" != '' ]]; then
                   MEET_INITIAL_API_KEY=$(echo "$SHARED_SECRET" | jq -r '.MEET_INITIAL_API_KEY')
-                else
-                  MEET_INITIAL_API_KEY=""
                 fi
-                MEET_INITIAL_API_KEY=$(echo "$SHARED_SECRET" | jq -r '.MEET_INITIAL_API_KEY')
                 LIVEKIT_API_KEY=$(echo "$SHARED_SECRET" | jq -r '.LIVEKIT_API_KEY')
                 LIVEKIT_API_SECRET=$(echo "$SHARED_SECRET" | jq -r '.LIVEKIT_API_SECRET')
                 ENABLED_MODULES=$(echo "$SHARED_SECRET" | jq -r '.ENABLED_MODULES')
 
-                # Base command
-                INSTALL_COMMAND="sh <(curl -fsSL http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_master_node.sh)"
+                # Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
+                INSTALLER_SCRIPT="/tmp/install_ov_master_node.sh"
+                curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_master_node.sh"
+                if [ ! -s "$INSTALLER_SCRIPT" ]; then
+                  echo "Downloaded OpenVidu master node installer is empty or missing" >&2
+                  exit 1
+                fi
+                INSTALL_COMMAND="sh $INSTALLER_SCRIPT"
 
                 # Common arguments
                 COMMON_ARGS=(
@@ -1837,6 +1843,10 @@ Resources:
               content: !Sub |
                 #!/bin/bash
                 set -e
+                # Only master 1 writes the shared secret, to avoid a lost-update race
+                if [[ "${!MASTER_NODE_NUM:-}" != "1" ]]; then
+                  exit 0
+                fi
                 # Get current shared secret
                 SHARED_SECRET=$(aws secretsmanager get-secret-value \
                   --region ${AWS::Region} \
@@ -2103,6 +2113,8 @@ Resources:
 
   OpenViduMasterNode1:
     Type: AWS::EC2::Instance
+    # Depends on its own SSM parameter so its put-parameter can't race the parameter's creation
+    DependsOn: MasterNode1PrivateIpParameter
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref OpenViduMasterLaunchTemplate
@@ -2132,6 +2144,8 @@ Resources:
           fi
 
           cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource OpenViduMasterLaunchTemplate
+
+          export MASTER_NODE_NUM=1
 
           # Install OpenVidu
           /usr/local/bin/install.sh "MasterNodesWaitCondition1" || { echo "[OpenVidu] error installing OpenVidu"; exit 1; }
@@ -2179,7 +2193,7 @@ Resources:
 
   OpenViduMasterNode2:
     Type: AWS::EC2::Instance
-    DependsOn: MasterNodesWaitCondition1
+    DependsOn: MasterNode2PrivateIpParameter
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref OpenViduMasterLaunchTemplate
@@ -2209,6 +2223,8 @@ Resources:
           fi
 
           cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource OpenViduMasterLaunchTemplate
+
+          export MASTER_NODE_NUM=2
 
           # Install OpenVidu
           /usr/local/bin/install.sh "MasterNodesWaitCondition2" || { echo "[OpenVidu] error installing OpenVidu"; exit 1; }
@@ -2256,7 +2272,7 @@ Resources:
 
   OpenViduMasterNode3:
     Type: AWS::EC2::Instance
-    DependsOn: MasterNodesWaitCondition2
+    DependsOn: MasterNode3PrivateIpParameter
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref OpenViduMasterLaunchTemplate
@@ -2286,6 +2302,8 @@ Resources:
           fi
 
           cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource OpenViduMasterLaunchTemplate
+
+          export MASTER_NODE_NUM=3
 
           # Install OpenVidu
           /usr/local/bin/install.sh "MasterNodesWaitCondition3" || { echo "[OpenVidu] error installing OpenVidu"; exit 1; }
@@ -2333,7 +2351,7 @@ Resources:
 
   OpenViduMasterNode4:
     Type: AWS::EC2::Instance
-    DependsOn: MasterNodesWaitCondition3
+    DependsOn: MasterNode4PrivateIpParameter
     Properties:
       LaunchTemplate:
         LaunchTemplateId: !Ref OpenViduMasterLaunchTemplate
@@ -2363,6 +2381,8 @@ Resources:
           fi
 
           cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource OpenViduMasterLaunchTemplate
+
+          export MASTER_NODE_NUM=4
 
           # Install OpenVidu
           /usr/local/bin/install.sh "MasterNodesWaitCondition4" || { echo "[OpenVidu] error installing OpenVidu"; exit 1; }
@@ -2453,6 +2473,25 @@ Resources:
                   exit 1
                 fi
 
+                SECRETS_WAIT_ATTEMPTS=0
+                SECRETS_WAIT_MAX=360
+                while true; do
+                  ALL_SECRETS_GENERATED=$(echo "$SHARED_SECRET" | jq -r '.ALL_SECRETS_GENERATED')
+                  if [[ "$ALL_SECRETS_GENERATED" == "true" ]]; then
+                    break
+                  fi
+                  SECRETS_WAIT_ATTEMPTS=$((SECRETS_WAIT_ATTEMPTS + 1))
+                  if [[ $SECRETS_WAIT_ATTEMPTS -ge $SECRETS_WAIT_MAX ]]; then
+                    echo "Error: timed out after 30 minutes waiting for shared secrets to be generated"
+                    exit 1
+                  fi
+                  sleep 5
+                  SHARED_SECRET="$(aws secretsmanager get-secret-value \
+                    --region ${AWS::Region} \
+                    --secret-id openvidu-ha-${AWS::Region}-${AWS::StackName} \
+                    --query SecretString --output text || echo 'none')"
+                done
+
                 # Get OpenVidu Media Nodes version to deploy
                 OPENVIDU_VERSION=$(echo "$SHARED_SECRET" | jq -r '.OPENVIDU_VERSION')
                 if [[ "$OPENVIDU_VERSION" == "none" ]]; then
@@ -2460,20 +2499,39 @@ Resources:
                   exit 1
                 fi
 
-                ALL_SECRETS_GENERATED=$(echo "$SHARED_SECRET" | jq -r '.ALL_SECRETS_GENERATED')
-                if [[ "$ALL_SECRETS_GENERATED" == "none" ]]; then
-                  echo "Error: Secrets not generated"
-                  exit 1
-                fi
-                MASTER_NODE_1_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_1_PRIVATE_IP')
-                MASTER_NODE_2_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_2_PRIVATE_IP')
-                MASTER_NODE_3_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_3_PRIVATE_IP')
-                MASTER_NODE_4_PRIVATE_IP=$(echo "$SHARED_SECRET" | jq -r '.MASTER_NODE_4_PRIVATE_IP')
+                IP_WAIT_ATTEMPTS=0
+                IP_WAIT_MAX=360
+                while true; do
+                  MASTER_NODE_1_PRIVATE_IP=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-1-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+                  MASTER_NODE_2_PRIVATE_IP=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-2-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+                  MASTER_NODE_3_PRIVATE_IP=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-3-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+                  MASTER_NODE_4_PRIVATE_IP=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-4-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+
+                  if [[ "$MASTER_NODE_1_PRIVATE_IP" != "none" ]] && [[ -n "$MASTER_NODE_1_PRIVATE_IP" ]] &&
+                      [[ "$MASTER_NODE_2_PRIVATE_IP" != "none" ]] && [[ -n "$MASTER_NODE_2_PRIVATE_IP" ]] &&
+                      [[ "$MASTER_NODE_3_PRIVATE_IP" != "none" ]] && [[ -n "$MASTER_NODE_3_PRIVATE_IP" ]] &&
+                      [[ "$MASTER_NODE_4_PRIVATE_IP" != "none" ]] && [[ -n "$MASTER_NODE_4_PRIVATE_IP" ]]; then
+                    break
+                  fi
+
+                  IP_WAIT_ATTEMPTS=$((IP_WAIT_ATTEMPTS + 1))
+                  if [[ $IP_WAIT_ATTEMPTS -ge $IP_WAIT_MAX ]]; then
+                    echo "Error: timed out after 30 minutes waiting for all master nodes to publish their private IPs to SSM"
+                    exit 1
+                  fi
+                  sleep 5
+                done
                 MASTER_NODE_PRIVATE_IP_LIST="$MASTER_NODE_1_PRIVATE_IP,$MASTER_NODE_2_PRIVATE_IP,$MASTER_NODE_3_PRIVATE_IP,$MASTER_NODE_4_PRIVATE_IP"
                 REDIS_PASSWORD=$(echo "$SHARED_SECRET" | jq -r '.REDIS_PASSWORD')
 
-                # Base command
-                INSTALL_COMMAND="sh <(curl -fsSL http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_media_node.sh)"
+                # Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
+                INSTALLER_SCRIPT="/tmp/install_ov_media_node.sh"
+                curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_media_node.sh"
+                if [ ! -s "$INSTALLER_SCRIPT" ]; then
+                  echo "Downloaded OpenVidu media node installer is empty or missing" >&2
+                  exit 1
+                fi
+                INSTALL_COMMAND="sh $INSTALLER_SCRIPT"
 
                 # Common arguments
                 COMMON_ARGS=(
@@ -2609,12 +2667,35 @@ Resources:
               python3 -m pip install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-${!CFN_BOOTSTRAP_VERSION}.tar.gz
             fi
 
-            cfn-init --region ${AWS::Region} --stack ${AWS::StackId} --resource OpenViduMediaNodeLaunchTemplate
+            cfn-init --region ${AWS::Region} --stack ${AWS::StackName} --resource OpenViduMediaNodeLaunchTemplate
 
             export HOME="/root"
 
             # Install OpenVidu
             /usr/local/bin/install.sh || { echo "[OpenVidu] error installing OpenVidu"; /usr/local/bin/set_as_unhealthy.sh; exit 1; }
+
+            MASTER_IP_1=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-1-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+            MASTER_IP_2=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-2-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+            MASTER_IP_3=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-3-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+            MASTER_IP_4=$(aws ssm get-parameter --region ${AWS::Region} --name "/openvidu/${AWS::StackName}/master-node-4-private-ip" --query Parameter.Value --output text 2>/dev/null || echo 'none')
+            MASTER_HEALTHY=false
+            for i in $(seq 1 360); do
+              for MASTER_IP in "$MASTER_IP_1" "$MASTER_IP_2" "$MASTER_IP_3" "$MASTER_IP_4"; do
+                if [ "$MASTER_IP" != "none" ] && [ -n "$MASTER_IP" ] && curl -sf "http://$MASTER_IP:7880/health/caddy" >/dev/null 2>&1; then
+                  MASTER_HEALTHY=true
+                  break
+                fi
+              done
+              if [ "$MASTER_HEALTHY" = "true" ]; then
+                break
+              fi
+              sleep 5
+            done
+            if [ "$MASTER_HEALTHY" != "true" ]; then
+              echo "[OpenVidu] no master node became healthy after 30 minutes"
+              /usr/local/bin/set_as_unhealthy.sh
+              exit 1
+            fi
 
             # Start OpenVidu
             systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; /usr/local/bin/set_as_unhealthy.sh; exit 1; }
@@ -3191,8 +3272,6 @@ Resources:
 
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    DependsOn:
-      - MasterNodesWaitCondition4
     Properties:
       Name:
         Fn::Join:
