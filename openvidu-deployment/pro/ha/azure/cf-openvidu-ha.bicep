@@ -397,7 +397,6 @@ if [[ $MASTER_NODE_NUM -eq 1 ]] && [[ "$ALL_SECRETS_GENERATED" == "" || "$ALL_SE
   ALL_SECRETS_GENERATED="$(/usr/local/bin/store_secret.sh save ALL-SECRETS-GENERATED "true")"
 fi
 
-# Wait (bounded: 360 x 5s = 30 min) until all 4 master nodes have published their private IPs
 IP_WAIT_MAX_RETRIES=360
 IP_WAIT_INTERVAL=5
 IP_WAIT_RETRIES=0
@@ -421,7 +420,7 @@ while true; do
   sleep $IP_WAIT_INTERVAL
 done
 
-# Wait (bounded: 360 x 5s = 30 min) until master-node-1 has generated all shared secrets before fetching them
+# Wait until master-node-1 has generated all shared secrets before fetching them
 SECRETS_WAIT_MAX_RETRIES=360
 SECRETS_WAIT_INTERVAL=5
 SECRETS_WAIT_RETRIES=0
@@ -467,7 +466,7 @@ fi
 ENABLED_MODULES=$(az keyvault secret show --vault-name ${keyVaultName} --name ENABLED-MODULES --query value -o tsv)
 
 
-# Download the installer script (retry transient curl failures; fail if empty/missing)
+# Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
 INSTALLER_SCRIPT="/tmp/install_ov_master_node.sh"
 curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_master_node.sh"
 if [ ! -s "$INSTALLER_SCRIPT" ]; then
@@ -1087,12 +1086,9 @@ systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; exit 1;
 # Launch on reboot
 echo "@reboot /usr/local/bin/restart.sh >> /var/log/openvidu-restart.log" 2>&1 | crontab
 
-# Wait until this master node is healthy (check_app_ready.sh caps at 1200s).
-# On failure exit WITHOUT publishing readiness, so media nodes keep waiting for another master.
+# check_app_ready.sh internally caps its wait at 1200s
 /usr/local/bin/check_app_ready.sh || { echo "[OpenVidu] master node did not become healthy"; exit 1; }
 
-# Publish readiness so media nodes can start. Every healthy master writes the same value, so the
-# first healthy master unblocks media and a failed master can no longer leave this unset (no SPOF).
 az keyvault secret set --vault-name ${keyVaultName} --name FINISH-MASTER-NODE --value "true"
 
 MASTER_NODE_NUM=${masterNodeNum}
@@ -1295,8 +1291,7 @@ apt-get update && apt-get install -y \
 # Get own private IP
 PRIVATE_IP=$(curl -H Metadata:true --noproxy "*" "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/privateIpAddress?api-version=2017-08-01&format=text")
 
-# Gate 1: wait (bounded: 360 x 5s = 30 min) until master nodes generated the shared secrets and
-# published their 4 private IPs. This lets the heavy media installer run in parallel with the masters.
+# Gate 1: wait for master secrets and IPs before installing
 WAIT_INTERVAL=5
 MAX_RETRIES=360
 RETRIES=0
@@ -1308,7 +1303,6 @@ while true; do
   MASTER_NODE_3_PRIVATE_IP=$(az keyvault secret show --vault-name ${keyVaultName} --name MASTER-NODE-3-PRIVATE-IP --query value -o tsv 2>/dev/null)
   MASTER_NODE_4_PRIVATE_IP=$(az keyvault secret show --vault-name ${keyVaultName} --name MASTER-NODE-4-PRIVATE-IP --query value -o tsv 2>/dev/null)
 
-  # Break once secrets are generated and all 4 master IPs are published
   if [ "$ALL_SECRETS_GENERATED" == "true" ] &&
       [ "$MASTER_NODE_1_PRIVATE_IP" != "" ] &&
       [ "$MASTER_NODE_2_PRIVATE_IP" != "" ] &&
@@ -1336,7 +1330,7 @@ REDIS_PASSWORD=$(az keyvault secret show --vault-name ${keyVaultName} --name RED
 ENABLED_MODULES=$(az keyvault secret show --vault-name ${keyVaultName} --name ENABLED-MODULES --query value -o tsv)
 OPENVIDU_VERSION=$(az keyvault secret show --vault-name ${keyVaultName} --name OPENVIDU-VERSION --query value -o tsv)
 
-# Download the installer script (retry transient curl failures; fail if empty/missing)
+# Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
 INSTALLER_SCRIPT="/tmp/install_ov_media_node.sh"
 curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_media_node.sh"
 if [ ! -s "$INSTALLER_SCRIPT" ]; then
@@ -1473,10 +1467,10 @@ az vmss update --resource-group $RESOURCE_GROUP_NAME --name $VM_SCALE_SET_NAME -
 
 export HOME="/root"
 
-# Install OpenVidu (heavy: docker + image pulls). Overlaps with the masters' own installs.
+# Install OpenVidu
 /usr/local/bin/install.sh || { echo "[OpenVidu] error installing OpenVidu"; /usr/local/bin/delete_media_node.sh; }
 
-# Gate 2: wait (bounded: 360 x 5s = 30 min) for the master nodes to publish readiness before starting
+# Gate 2: wait for master readiness before starting
 WAIT_INTERVAL=5
 MAX_RETRIES=360
 RETRIES=0

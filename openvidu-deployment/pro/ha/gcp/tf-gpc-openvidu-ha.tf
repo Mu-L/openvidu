@@ -314,8 +314,7 @@ locals {
   is_c4a_instance = startswith(var.masterNodesInstanceType, "c4a-")
 }
 
-# Default subnetwork the master instances live in (they use network = "default" with no
-# explicit subnetwork, so GCP places them in the auto-mode default subnetwork of the region)
+# Must match the subnetwork the master instances implicitly use (network = "default", no explicit subnetwork)
 data "google_compute_subnetwork" "default" {
   name   = "default"
   region = var.region
@@ -323,9 +322,6 @@ data "google_compute_subnetwork" "default" {
   depends_on = [google_project_service.compute_api]
 }
 
-# Static internal IPs for the master nodes. Reserving them up front lets the media instance
-# template and every master receive the full list without waiting for the master instances to
-# boot, which removes the runtime IP-exchange handshake through Secret Manager.
 resource "google_compute_address" "master_internal_ip" {
   count        = 4
   name         = lower("${var.stackName}-master-node-${count.index + 1}-internal-ip")
@@ -337,8 +333,7 @@ resource "google_compute_address" "master_internal_ip" {
 }
 
 locals {
-  # Master node private IPs come from the reserved static internal addresses (index 0 -> master
-  # node 1, ...). Comma-separated to match the installer's --master-node-private-ip-list format.
+  # Comma-separated: must match the installer's --master-node-private-ip-list format
   master_node_private_ip_list = join(",", google_compute_address.master_internal_ip[*].address)
 }
 
@@ -1018,7 +1013,6 @@ get_meta() { curl -s -H "Metadata-Flavor: Google" "$${METADATA_URL}/$1"; }
 # Get master node number from metadata
 MASTER_NODE_NUM=$(get_meta "instance/attributes/masterNodeNum")
 
-# Get the list of master node private IPs (static internal IPs passed via metadata)
 MASTER_NODE_PRIVATE_IP_LIST=$(get_meta "instance/attributes/masterNodePrivateIPList")
 
 # Check if secrets have been generated
@@ -1080,7 +1074,6 @@ if [[ $MASTER_NODE_NUM -eq 1 ]] && [[ "$ALL_SECRETS_GENERATED" == "false" ]]; th
 fi
 
 # Wait for master-1 to finish generating all shared secrets before reading them.
-# Bounded to 360 iterations x 5s = 30 minutes.
 i=0
 while ! gcloud secrets versions access latest --secret=ALL_SECRETS_GENERATED 2>/dev/null | grep -q "true"; do
   i=$((i + 1))
@@ -1115,8 +1108,7 @@ LIVEKIT_API_KEY=$(gcloud secrets versions access latest --secret=LIVEKIT_API_KEY
 LIVEKIT_API_SECRET=$(gcloud secrets versions access latest --secret=LIVEKIT_API_SECRET)
 ENABLED_MODULES=$(gcloud secrets versions access latest --secret=ENABLED_MODULES)
 
-# Build install command. Download the installer to a file first: process substitution
-# (sh <(curl ...)) would silently run an empty script and exit 0 on a transient curl failure.
+# Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
 INSTALLER_SCRIPT="/tmp/install_ov_master_node.sh"
 curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_master_node.sh"
 if [ ! -s "$INSTALLER_SCRIPT" ]; then
@@ -1474,7 +1466,6 @@ EOF
 
   check_app_ready_script = <<-EOF
 #!/bin/bash
-# Bounded to 240 iterations x 5s = 20 minutes.
 i=0
 while true; do
   HTTP_STATUS=$(curl -Ik http://localhost:7880/health/caddy 2>/dev/null | head -n1 | awk '{print $2}')
@@ -1624,7 +1615,6 @@ STACK_NAME=$(get_meta "instance/attributes/stackName")
 PRIVATE_IP=$(get_meta "instance/network-interfaces/0/ip")
 
 # Wait for master nodes to be ready by checking secrets.
-# Bounded to 180 iterations x 10s = 30 minutes.
 i=0
 while ! gcloud secrets versions access latest --secret=ALL_SECRETS_GENERATED 2>/dev/null | grep -q "true"; do
   i=$((i + 1))
@@ -1649,9 +1639,7 @@ if [[ "$OPENVIDU_VERSION" == "none" ]]; then
   exit 1
 fi
 
-# Build install command for media node. Download the installer to a file first: process
-# substitution (sh <(curl ...)) would silently run an empty script and exit 0 on a transient
-# curl failure.
+# Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
 INSTALLER_SCRIPT="/tmp/install_ov_media_node.sh"
 curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_media_node.sh"
 if [ ! -s "$INSTALLER_SCRIPT" ]; then
