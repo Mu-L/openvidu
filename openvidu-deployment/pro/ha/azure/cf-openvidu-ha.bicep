@@ -304,7 +304,7 @@ apt-get update && apt-get install -y \
 
 
 # Wait for the keyvault availability
-MAX_WAIT=100
+MAX_WAIT=300
 WAIT_INTERVAL=1
 ELAPSED_TIME=0
 set +e
@@ -397,6 +397,9 @@ if [[ $MASTER_NODE_NUM -eq 1 ]] && [[ "$ALL_SECRETS_GENERATED" == "" || "$ALL_SE
   ALL_SECRETS_GENERATED="$(/usr/local/bin/store_secret.sh save ALL-SECRETS-GENERATED "true")"
 fi
 
+IP_WAIT_MAX_RETRIES=360
+IP_WAIT_INTERVAL=5
+IP_WAIT_RETRIES=0
 while true; do
   MASTER_NODE_1_PRIVATE_IP=$(az keyvault secret show --vault-name ${keyVaultName} --name MASTER-NODE-1-PRIVATE-IP --query value -o tsv) || true
   MASTER_NODE_2_PRIVATE_IP=$(az keyvault secret show --vault-name ${keyVaultName} --name MASTER-NODE-2-PRIVATE-IP --query value -o tsv) || true
@@ -409,11 +412,26 @@ while true; do
       [[ "$MASTER_NODE_4_PRIVATE_IP" != "" ]]; then
     break
   fi
-    sleep 5
+  IP_WAIT_RETRIES=$((IP_WAIT_RETRIES + 1))
+  if [ $IP_WAIT_RETRIES -ge $IP_WAIT_MAX_RETRIES ]; then
+    echo "[OpenVidu] timed out after 30 min waiting for the 4 master nodes to publish their private IPs"
+    exit 1
+  fi
+  sleep $IP_WAIT_INTERVAL
 done
 
 # Wait until master-node-1 has generated all shared secrets before fetching them
-while [[ "$(az keyvault secret show --vault-name ${keyVaultName} --name ALL-SECRETS-GENERATED --query value -o tsv 2>/dev/null)" != "true" ]]; do sleep 5; done
+SECRETS_WAIT_MAX_RETRIES=360
+SECRETS_WAIT_INTERVAL=5
+SECRETS_WAIT_RETRIES=0
+while [[ "$(az keyvault secret show --vault-name ${keyVaultName} --name ALL-SECRETS-GENERATED --query value -o tsv 2>/dev/null)" != "true" ]]; do
+  SECRETS_WAIT_RETRIES=$((SECRETS_WAIT_RETRIES + 1))
+  if [ $SECRETS_WAIT_RETRIES -ge $SECRETS_WAIT_MAX_RETRIES ]; then
+    echo "[OpenVidu] timed out after 30 min waiting for ALL-SECRETS-GENERATED to become true"
+    exit 1
+  fi
+  sleep $SECRETS_WAIT_INTERVAL
+done
 
 
 # Fetch the values in the keyvault
@@ -448,8 +466,16 @@ fi
 ENABLED_MODULES=$(az keyvault secret show --vault-name ${keyVaultName} --name ENABLED-MODULES --query value -o tsv)
 
 
+# Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
+INSTALLER_SCRIPT="/tmp/install_ov_master_node.sh"
+curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_master_node.sh"
+if [ ! -s "$INSTALLER_SCRIPT" ]; then
+  echo "[OpenVidu] failed to download the master node installer script"
+  exit 1
+fi
+
 # Base command
-INSTALL_COMMAND="sh <(curl -fsSL http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_master_node.sh)"
+INSTALL_COMMAND="sh $INSTALLER_SCRIPT"
 
 # Common arguments
 COMMON_ARGS=(
@@ -811,7 +837,7 @@ INSTALL_DIR="/opt/openvidu"
 CLUSTER_CONFIG_DIR="${INSTALL_DIR}/config/cluster"
 
 # Retry login + storage key fetch to allow the Contributor role assignment to propagate
-MAX_WAIT=100
+MAX_WAIT=300
 WAIT_INTERVAL=1
 ELAPSED_TIME=0
 set +e
@@ -1043,8 +1069,6 @@ az login --identity --allow-no-subscriptions
 
 echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
 
-apt-get update && apt-get install -y
-
 export HOME="/root"
 
 # Install OpenVidu
@@ -1062,20 +1086,18 @@ systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; exit 1;
 # Launch on reboot
 echo "@reboot /usr/local/bin/restart.sh >> /var/log/openvidu-restart.log" 2>&1 | crontab
 
+# check_app_ready.sh internally caps its wait at 1200s
+/usr/local/bin/check_app_ready.sh || { echo "[OpenVidu] master node did not become healthy"; exit 1; }
+
+az keyvault secret set --vault-name ${keyVaultName} --name FINISH-MASTER-NODE --value "true"
+
 MASTER_NODE_NUM=${masterNodeNum}
 if [[ $MASTER_NODE_NUM -eq 4 ]]; then
   # Creating scale in lock
   set +e
   az storage blob upload --account-name ${storageAccountName} --container-name automation-locks --name lock.txt --file /dev/null --auth-mode key
   set -e
-
-  #Finish all the nodes
-  az keyvault secret set --vault-name ${keyVaultName} --name FINISH-MASTER-NODE --value "true"
 fi
-
-# Wait for the app
-sleep 150
-/usr/local/bin/check_app_ready.sh
 '''
 
 var userDataMasterNode1 = reduce(
@@ -1168,7 +1190,6 @@ resource openviduMasterNode2 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     }
     userData: base64(userDataMasterNode2)
   }
-  dependsOn: [openviduMasterNode1]
 }
 
 resource openviduMasterNode3 'Microsoft.Compute/virtualMachines@2023-09-01' = {
@@ -1203,7 +1224,6 @@ resource openviduMasterNode3 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     }
     userData: base64(userDataMasterNode3)
   }
-  dependsOn: [openviduMasterNode2]
 }
 
 resource openviduMasterNode4 'Microsoft.Compute/virtualMachines@2023-09-01' = {
@@ -1238,7 +1258,6 @@ resource openviduMasterNode4 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     }
     userData: base64(userDataMasterNode4)
   }
-  dependsOn: [openviduMasterNode3]
 }
 
 /*------------------------------------------- MEDIA NODES -------------------------------------------*/
@@ -1272,23 +1291,29 @@ apt-get update && apt-get install -y \
 # Get own private IP
 PRIVATE_IP=$(curl -H Metadata:true --noproxy "*" "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/privateIpAddress?api-version=2017-08-01&format=text")
 
-WAIT_INTERVAL=1
-MAX_WAIT=10000
-ELAPSED_TIME=0
+# Gate 1: wait for master secrets and IPs before installing
+WAIT_INTERVAL=5
+MAX_RETRIES=360
+RETRIES=0
 set +e
 while true; do
-  # get secret value
-  FINISH_MASTER_NODE=$(az keyvault secret show --vault-name ${keyVaultName} --name FINISH-MASTER-NODE --query value -o tsv)
+  ALL_SECRETS_GENERATED=$(az keyvault secret show --vault-name ${keyVaultName} --name ALL-SECRETS-GENERATED --query value -o tsv 2>/dev/null)
+  MASTER_NODE_1_PRIVATE_IP=$(az keyvault secret show --vault-name ${keyVaultName} --name MASTER-NODE-1-PRIVATE-IP --query value -o tsv 2>/dev/null)
+  MASTER_NODE_2_PRIVATE_IP=$(az keyvault secret show --vault-name ${keyVaultName} --name MASTER-NODE-2-PRIVATE-IP --query value -o tsv 2>/dev/null)
+  MASTER_NODE_3_PRIVATE_IP=$(az keyvault secret show --vault-name ${keyVaultName} --name MASTER-NODE-3-PRIVATE-IP --query value -o tsv 2>/dev/null)
+  MASTER_NODE_4_PRIVATE_IP=$(az keyvault secret show --vault-name ${keyVaultName} --name MASTER-NODE-4-PRIVATE-IP --query value -o tsv 2>/dev/null)
 
-  # Check if all master nodes finished
-  if [ "$FINISH_MASTER_NODE" == "true" ]; then
+  if [ "$ALL_SECRETS_GENERATED" == "true" ] &&
+      [ "$MASTER_NODE_1_PRIVATE_IP" != "" ] &&
+      [ "$MASTER_NODE_2_PRIVATE_IP" != "" ] &&
+      [ "$MASTER_NODE_3_PRIVATE_IP" != "" ] &&
+      [ "$MASTER_NODE_4_PRIVATE_IP" != "" ]; then
     break
   fi
 
-  ELAPSED_TIME=$((ELAPSED_TIME + WAIT_INTERVAL))
-
-  # Check if the maximum waiting time has been reached
-  if [ $ELAPSED_TIME -ge $MAX_WAIT ]; then
+  RETRIES=$((RETRIES + 1))
+  if [ $RETRIES -ge $MAX_RETRIES ]; then
+    echo "[OpenVidu] timed out after 30 min waiting for master nodes to generate secrets and publish their IPs"
     exit 1
   fi
 
@@ -1305,8 +1330,16 @@ REDIS_PASSWORD=$(az keyvault secret show --vault-name ${keyVaultName} --name RED
 ENABLED_MODULES=$(az keyvault secret show --vault-name ${keyVaultName} --name ENABLED-MODULES --query value -o tsv)
 OPENVIDU_VERSION=$(az keyvault secret show --vault-name ${keyVaultName} --name OPENVIDU-VERSION --query value -o tsv)
 
+# Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
+INSTALLER_SCRIPT="/tmp/install_ov_media_node.sh"
+curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_media_node.sh"
+if [ ! -s "$INSTALLER_SCRIPT" ]; then
+  echo "[OpenVidu] failed to download the media node installer script"
+  exit 1
+fi
+
 # Base command
-INSTALL_COMMAND="sh <(curl -fsSL http://get.openvidu.io/pro/ha/$OPENVIDU_VERSION/install_ov_media_node.sh)"
+INSTALL_COMMAND="sh $INSTALLER_SCRIPT"
 
 # Common arguments
 COMMON_ARGS=(
@@ -1413,8 +1446,7 @@ chmod +x /usr/local/bin/delete_media_node.sh
 
 echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
 
-apt-get update && apt-get install -y 
-apt-get install -y jq
+apt-get update && apt-get install -y jq
 
 # Install azure cli
 AZURE_CLI_VERSION=2.87.0
@@ -1437,6 +1469,26 @@ export HOME="/root"
 
 # Install OpenVidu
 /usr/local/bin/install.sh || { echo "[OpenVidu] error installing OpenVidu"; /usr/local/bin/delete_media_node.sh; }
+
+# Gate 2: wait for master readiness before starting
+WAIT_INTERVAL=5
+MAX_RETRIES=360
+RETRIES=0
+set +e
+while true; do
+  FINISH_MASTER_NODE=$(az keyvault secret show --vault-name ${keyVaultName} --name FINISH-MASTER-NODE --query value -o tsv 2>/dev/null)
+  if [ "$FINISH_MASTER_NODE" == "true" ]; then
+    break
+  fi
+  RETRIES=$((RETRIES + 1))
+  if [ $RETRIES -ge $MAX_RETRIES ]; then
+    echo "[OpenVidu] timed out after 30 min waiting for FINISH-MASTER-NODE"
+    /usr/local/bin/delete_media_node.sh
+    exit 1
+  fi
+  sleep $WAIT_INTERVAL
+done
+set -e
 
 # Start OpenVidu
 systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; /usr/local/bin/delete_media_node.sh; }
@@ -1470,6 +1522,7 @@ var userDataParamsMedia = {
   base64delete_mediaNode: base64delete_mediaNode_ScriptMedia
   resourceGroupName: resourceGroup().name
   vmScaleSetName: '${stackName}-mediaNodeScaleSet'
+  keyVaultName: keyVaultName
 }
 
 var userDataMediaNode = reduce(
