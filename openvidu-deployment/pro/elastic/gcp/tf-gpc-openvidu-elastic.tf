@@ -27,6 +27,8 @@ resource "google_secret_manager_secret" "openvidu_shared_info" {
   replication {
     auto {}
   }
+
+  depends_on = [google_project_service.secretmanager_api]
 }
 
 # GCS bucket
@@ -36,12 +38,16 @@ resource "google_storage_bucket" "bucket" {
   location                    = var.region
   force_destroy               = true
   uniform_bucket_level_access = true
+
+  depends_on = [google_project_service.storage_api]
 }
 
 # Service account for the instance
 resource "google_service_account" "service_account" {
   account_id   = lower("${substr(var.stackName, 0, 12)}-sa")
   display_name = "OpenVidu instance service account"
+
+  depends_on = [google_project_service.iam_api]
 }
 
 # IAM bindings for the service account so the instance can access Secret Manager and GCS
@@ -49,6 +55,8 @@ resource "google_project_iam_member" "iam_project_role" {
   project = var.projectId
   role    = "roles/owner"
   member  = "serviceAccount:${google_service_account.service_account.email}"
+
+  depends_on = [google_project_service.cloudresourcemanager_api]
 }
 
 resource "google_compute_firewall" "firewall_master" {
@@ -62,6 +70,8 @@ resource "google_compute_firewall" "firewall_master" {
 
   source_ranges = ["0.0.0.0/0"]
   target_tags   = [lower("${var.stackName}-master-node")]
+
+  depends_on = [google_project_service.compute_api]
 }
 
 resource "google_compute_firewall" "firewall_media" {
@@ -79,6 +89,8 @@ resource "google_compute_firewall" "firewall_media" {
 
   source_ranges = ["0.0.0.0/0"]
   target_tags   = [lower("${var.stackName}-media-node")]
+
+  depends_on = [google_project_service.compute_api]
 }
 
 resource "google_compute_firewall" "firewall_media_to_master" {
@@ -96,6 +108,8 @@ resource "google_compute_firewall" "firewall_media_to_master" {
   target_tags = [
     lower("${var.stackName}-master-node"),
   ]
+
+  depends_on = [google_project_service.compute_api]
 }
 
 resource "google_compute_firewall" "firewall_master_to_media" {
@@ -113,6 +127,8 @@ resource "google_compute_firewall" "firewall_master_to_media" {
   target_tags = [
     lower("${var.stackName}-media-node")
   ]
+
+  depends_on = [google_project_service.compute_api]
 }
 
 # Create Public Ip address (if not provided)
@@ -120,6 +136,8 @@ resource "google_compute_address" "public_ip_address" {
   count  = var.publicIpAddress == "" ? 1 : 0
   name   = lower("${var.stackName}-public-ip")
   region = var.region
+
+  depends_on = [google_project_service.compute_api]
 }
 
 locals {
@@ -181,6 +199,9 @@ resource "google_compute_instance" "openvidu_master_node" {
     stack     = var.stackName
     node-type = "master"
   }
+
+  # Explicit: transitive coverage via public_ip_address is absent when publicIpAddress is provided
+  depends_on = [google_project_service.compute_api]
 }
 
 locals {
@@ -234,6 +255,24 @@ resource "google_compute_instance_template" "media_node_template" {
   }
 }
 
+# Health check for media node auto-healing
+resource "google_compute_region_health_check" "media_node_health_check" {
+  name   = lower("${var.stackName}-media-node-health-check")
+  region = var.region
+
+  # TCP-only, generous thresholds: auto-heal recreation kills live WebRTC sessions
+  tcp_health_check {
+    port = 7880
+  }
+
+  check_interval_sec  = 30
+  timeout_sec         = 10
+  healthy_threshold   = 2
+  unhealthy_threshold = 5
+
+  depends_on = [google_project_service.compute_api]
+}
+
 # Managed Instance Group for Media Nodes
 resource "google_compute_region_instance_group_manager" "media_node_group" {
   name               = lower("${var.stackName}-media-node-group")
@@ -248,6 +287,12 @@ resource "google_compute_region_instance_group_manager" "media_node_group" {
   named_port {
     name = "http"
     port = 7880
+  }
+
+  # initial_delay_sec generous so media nodes finish installing before health checks can recreate them
+  auto_healing_policies {
+    health_check      = google_compute_region_health_check.media_node_health_check.id
+    initial_delay_sec = 600
   }
 
   depends_on = [google_compute_instance.openvidu_master_node]
@@ -548,6 +593,8 @@ resource "google_storage_bucket_object" "function_source" {
   name   = "function-source.zip"
   bucket = local.isEmpty ? google_storage_bucket.bucket[0].name : var.bucketName
   source = data.archive_file.function_source.output_path
+
+  depends_on = [google_project_service.storage_api]
 }
 
 resource "google_cloudfunctions2_function" "scalein_function" {
@@ -577,6 +624,12 @@ resource "google_cloudfunctions2_function" "scalein_function" {
     }
     service_account_email = google_service_account.service_account.email
   }
+
+  depends_on = [
+    google_project_service.cloudfunctions_api,
+    google_project_service.cloudbuild_api,
+    google_project_service.run_api
+  ]
 }
 
 # Cloud Scheduler to trigger the function every 5 minutes
@@ -606,6 +659,8 @@ resource "google_cloud_scheduler_job" "scale_scheduler" {
       service_account_email = google_service_account.service_account.email
     }
   }
+
+  depends_on = [google_project_service.cloudscheduler_api]
 }
 
 # ------------------------- local values -------------------------
@@ -640,8 +695,8 @@ gcloud auth activate-service-account --key-file=/dev/null 2>/dev/null || true
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1"
 get_meta() { curl -s -H "Metadata-Flavor: Google" "$${METADATA_URL}/$1"; }
 
-# Create counter file for tracking script executions
-echo 1 > /usr/local/bin/openvidu_install_counter.txt
+# Disable command tracing so secrets are not printed to the serial console
+set +x
 
 # Configure domain
 if [[ "${var.domainName}" == "" ]]; then
@@ -690,8 +745,14 @@ OPENVIDU_VERSION="$(/usr/local/bin/store_secret.sh save OPENVIDU_VERSION "$OPENV
 
 ALL_SECRETS_GENERATED="$(/usr/local/bin/store_secret.sh save ALL_SECRETS_GENERATED "true")"
 
-# Build install command and args
-INSTALL_COMMAND="sh <(curl -fsSL http://get.openvidu.io/pro/elastic/$OPENVIDU_VERSION/install_ov_master_node.sh)"
+# Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
+INSTALLER_SCRIPT="/tmp/install_ov_master_node.sh"
+curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/elastic/$OPENVIDU_VERSION/install_ov_master_node.sh"
+if [ ! -s "$INSTALLER_SCRIPT" ]; then
+  echo "Downloaded OpenVidu master node installer is empty or missing" >&2
+  exit 1
+fi
+INSTALL_COMMAND="sh $INSTALLER_SCRIPT"
 
 # Common arguments
 COMMON_ARGS=(
@@ -778,6 +839,9 @@ SERVICE_ACCOUNT_EMAIL=$(get_meta "instance/service-accounts/default/email")
 # Create key for service account
 gcloud iam service-accounts keys create credentials.json --iam-account=$SERVICE_ACCOUNT_EMAIL
 
+# Disable command tracing so credentials are not printed to the serial console
+set +x
+
 # Create HMAC key and parse output
 HMAC_OUTPUT=$(gcloud storage hmac create $SERVICE_ACCOUNT_EMAIL --format="json")
 EXTERNAL_S3_ACCESS_KEY=$(echo "$HMAC_OUTPUT" | jq -r '.metadata.accessId')
@@ -841,6 +905,9 @@ gcloud auth activate-service-account --key-file=/dev/null 2>/dev/null || true
 INSTALL_DIR="/opt/openvidu"
 CLUSTER_CONFIG_DIR="$${INSTALL_DIR}/config/cluster"
 MASTER_NODE_CONFIG_DIR="$${INSTALL_DIR}/config/node"
+
+# Disable command tracing so secrets are not printed to the serial console
+set +x
 
 # Replace DOMAIN_NAME
 export DOMAIN=$(gcloud secrets versions access latest --secret=DOMAIN_NAME)
@@ -970,7 +1037,7 @@ echo -n "$ENABLED_MODULES" | gcloud secrets versions add ENABLED_MODULES --data-
 EOF
 
   get_value_from_config_script = <<-EOF
-#!/bin/bash -x
+#!/bin/bash
 set -e
 
 # Function to get the value of a given key from the environment file
@@ -1039,10 +1106,16 @@ EOF
 
   check_app_ready_script = <<-EOF
 #!/bin/bash
+i=0
 while true; do
-  HTTP_STATUS=$(curl -Ik http://localhost:7880/health/caddy | head -n1 | awk '{print $2}')
-  if [ $HTTP_STATUS == 200 ]; then
+  HTTP_STATUS=$(curl -Ik http://localhost:7880/health/caddy 2>/dev/null | head -n1 | awk '{print $2}')
+  if [ "$HTTP_STATUS" == "200" ]; then
     break
+  fi
+  i=$((i + 1))
+  if [ "$i" -ge 240 ]; then
+    echo "Timed out after 20 minutes waiting for OpenVidu to become ready" >&2
+    exit 1
   fi
   sleep 5
 done
@@ -1128,8 +1201,6 @@ CONFIG_S3_EOF
 
   echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
 
-  apt-get update && apt-get install -y
-  
   GCLOUD_VERSION=573.0.0
   # Install google cli
   if ! command -v gcloud >/dev/null 2>&1; then
@@ -1157,9 +1228,6 @@ CONFIG_S3_EOF
   # Update shared secret
   /usr/local/bin/after_install.sh || { echo "[OpenVidu] error updating shared secret"; exit 1; }
 
-  # restart.sh
-  echo "@reboot /usr/local/bin/restart.sh >> /var/log/openvidu-restart.log" 2>&1 | crontab
-  
   # Mark installation as complete
   echo "installation_complete" > /usr/local/bin/openvidu_install_counter.txt
 fi
@@ -1196,11 +1264,20 @@ MASTER_NODE_PRIVATE_IP=$(get_meta "instance/attributes/masterNodePrivateIP")
 STACK_NAME=$(get_meta "instance/attributes/stackName")
 PRIVATE_IP=$(get_meta "instance/network-interfaces/0/ip")
 
-# Wait for master node to be ready by checking secrets
-while ! gcloud secrets versions access latest --secret=ALL_SECRETS_GENERATED 2>/dev/null; do
+# Wait for master node to be ready by checking secrets.
+i=0
+while ! gcloud secrets versions access latest --secret=ALL_SECRETS_GENERATED 2>/dev/null | grep -q "true"; do
+  i=$((i + 1))
+  if [ "$i" -ge 180 ]; then
+    echo "Timed out after 30 minutes waiting for master node to initialize secrets" >&2
+    exit 1
+  fi
   echo "Waiting for master node to initialize secrets..."
   sleep 10
 done
+
+# Disable command tracing so secrets are not printed to the serial console
+set +x
 
 # Get all necessary values from secrets
 DOMAIN=$(gcloud secrets versions access latest --secret=DOMAIN_NAME)
@@ -1215,8 +1292,14 @@ if [[ "$OPENVIDU_VERSION" == "none" ]]; then
   exit 1
 fi
 
-# Build install command for media node
-INSTALL_COMMAND="sh <(curl -fsSL http://get.openvidu.io/pro/elastic/$OPENVIDU_VERSION/install_ov_media_node.sh)"
+# Download first: sh <(curl ...) would silently run an empty script on a transient curl failure
+INSTALLER_SCRIPT="/tmp/install_ov_media_node.sh"
+curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/elastic/$OPENVIDU_VERSION/install_ov_media_node.sh"
+if [ ! -s "$INSTALLER_SCRIPT" ]; then
+  echo "Downloaded OpenVidu media node installer is empty or missing" >&2
+  exit 1
+fi
+INSTALL_COMMAND="sh $INSTALLER_SCRIPT"
 
 # Media node arguments
 COMMON_ARGS=(
@@ -1320,52 +1403,56 @@ EOF
 #!/bin/bash -x
 set -eu -o pipefail
 
-# install.sh (media node)
-cat > /usr/local/bin/install.sh << 'INSTALL_EOF'
+# Check if installation already completed
+if [ -f /usr/local/bin/openvidu_install_counter.txt ]; then
+  # Launch on reboot
+  systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; exit 1; }
+else
+  # install.sh (media node)
+  cat > /usr/local/bin/install.sh << 'INSTALL_EOF'
 ${local.install_script_media}
 INSTALL_EOF
-chmod +x /usr/local/bin/install.sh
+  chmod +x /usr/local/bin/install.sh
 
-# graceful_shutdown.sh
-cat > /usr/local/bin/graceful_shutdown.sh << 'GRACEFUL_SHUTDOWN_EOF'
+  # graceful_shutdown.sh
+  cat > /usr/local/bin/graceful_shutdown.sh << 'GRACEFUL_SHUTDOWN_EOF'
 ${local.graceful_shutdown_script}
 GRACEFUL_SHUTDOWN_EOF
-chmod +x /usr/local/bin/graceful_shutdown.sh
+  chmod +x /usr/local/bin/graceful_shutdown.sh
 
-echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
+  echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
 
-apt-get update && apt-get install -y
+  GCLOUD_VERSION=573.0.0
+  # Install google cli
+  if ! command -v gcloud >/dev/null 2>&1; then
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+    apt-get update && apt-get install -y google-cloud-cli=$${GCLOUD_VERSION}-0
+  fi
 
-GCLOUD_VERSION=573.0.0
-# Install google cli
-if ! command -v gcloud >/dev/null 2>&1; then
-  curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
-  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
-  apt-get update && apt-get install -y google-cloud-cli=$${GCLOUD_VERSION}-0
-fi
+  # Authenticate with gcloud using instance service account
+  gcloud auth activate-service-account --key-file=/dev/null 2>/dev/null || true
+  gcloud config set account $(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email" -H "Metadata-Flavor: Google")
+  gcloud config set project $(curl -s "http://metadata.google.internal/computeMetadata/v1/project/project-id" -H "Metadata-Flavor: Google")
 
-# Authenticate with gcloud using instance service account
-gcloud auth activate-service-account --key-file=/dev/null 2>/dev/null || true
-gcloud config set account $(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email" -H "Metadata-Flavor: Google")
-gcloud config set project $(curl -s "http://metadata.google.internal/computeMetadata/v1/project/project-id" -H "Metadata-Flavor: Google")
+  export HOME="/root"
 
-export HOME="/root"
+  # Install OpenVidu Media Node
+  /usr/local/bin/install.sh || { echo "[OpenVidu] error installing OpenVidu Media Node"; exit 1; }
 
-# Install OpenVidu Media Node
-/usr/local/bin/install.sh || { echo "[OpenVidu] error installing OpenVidu Media Node"; exit 1; }
+  # Mark installation as complete
+  echo "installation_complete" > /usr/local/bin/openvidu_install_counter.txt
 
-# Mark installation as complete
-echo "installation_complete" > /usr/local/bin/openvidu_install_counter.txt
+  # Start OpenVidu
+  systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; exit 1; }
 
-# Start OpenVidu
-systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; exit 1; }
-
-# Add cron job to check if instance is abandoned every minute
-cat > /usr/local/bin/check_abandoned.sh << 'CHECK_ABANDONED_EOF'
+  # Add cron job to check if instance is abandoned every minute
+  cat > /usr/local/bin/check_abandoned.sh << 'CHECK_ABANDONED_EOF'
 ${local.crontab_job_media}
 CHECK_ABANDONED_EOF
-chmod +x /usr/local/bin/check_abandoned.sh
+  chmod +x /usr/local/bin/check_abandoned.sh
 
-echo "*/1 * * * * /usr/local/bin/check_abandoned.sh > /var/log/openvidu-abandoned-check.log 2>&1" | crontab -
+  echo "*/1 * * * * /usr/local/bin/check_abandoned.sh > /var/log/openvidu-abandoned-check.log 2>&1" | crontab -
+fi
 EOF
 }
