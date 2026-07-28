@@ -212,7 +212,8 @@ var stringInterpolationParamsMaster = {
 }
 
 var installScriptTemplateMaster = '''
-#!/bin/bash -x
+#!/bin/bash
+set -e
 OPENVIDU_VERSION=main
 DOMAIN=
 
@@ -241,7 +242,7 @@ else
 fi
 
 # Wait for the keyvault availability
-MAX_WAIT=100
+MAX_WAIT=300
 WAIT_INTERVAL=1
 ELAPSED_TIME=0
 while true; do
@@ -306,8 +307,16 @@ OPENVIDU_VERSION="$(/usr/local/bin/store_secret.sh save OPENVIDU-VERSION "${OPEN
 ENABLED_MODULES="$(/usr/local/bin/store_secret.sh save ENABLED-MODULES "observability,openviduMeet,v2compatibility")"
 ALL_SECRETS_GENERATED="$(/usr/local/bin/store_secret.sh save ALL-SECRETS-GENERATED "true")"
 
+# Download to a file first: process substitution would silently run an empty script on a transient curl failure
+INSTALLER_SCRIPT="/tmp/install_ov_master_node.sh"
+curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/elastic/$OPENVIDU_VERSION/install_ov_master_node.sh"
+if [ ! -s "$INSTALLER_SCRIPT" ]; then
+  echo "[OpenVidu] failed to download the master node installer script"
+  exit 1
+fi
+
 # Base command
-INSTALL_COMMAND="sh <(curl -fsSL http://get.openvidu.io/pro/elastic/$OPENVIDU_VERSION/install_ov_master_node.sh)"
+INSTALL_COMMAND="sh $INSTALLER_SCRIPT"
 
 # Common arguments
 COMMON_ARGS=(
@@ -630,10 +639,17 @@ az network public-ip show \
 var check_app_readyScriptMaster = '''
 #!/bin/bash
 set -e
+MAX_WAIT=1200
+WAIT_INTERVAL=5
+ELAPSED_TIME=0
 while true; do
   HTTP_STATUS=$(curl -Ik http://localhost:7880/health/caddy | head -n1 | awk '{print $2}')
-  if [ $HTTP_STATUS == 200 ]; then
+  if [ "$HTTP_STATUS" = "200" ]; then
     break
+  fi
+  ELAPSED_TIME=$((ELAPSED_TIME + WAIT_INTERVAL))
+  if [ $ELAPSED_TIME -ge $MAX_WAIT ]; then
+    exit 1
   fi
   sleep 5
 done
@@ -660,11 +676,35 @@ set -e
 INSTALL_DIR="/opt/openvidu"
 CLUSTER_CONFIG_DIR="${INSTALL_DIR}/config/cluster"
 
-az login --identity
+# Retry login + storage key fetch to allow the Contributor role assignment to propagate
+MAX_WAIT=300
+WAIT_INTERVAL=1
+ELAPSED_TIME=0
+set +e
+while true; do
+  az login --identity
 
-# Config azure blob storage
-AZURE_ACCOUNT_NAME="${storageAccountName}"
-AZURE_ACCOUNT_KEY=$(az storage account keys list --account-name ${storageAccountName} --query '[0].value' -o tsv)
+  # Config azure blob storage
+  AZURE_ACCOUNT_NAME="${storageAccountName}"
+  AZURE_ACCOUNT_KEY=$(az storage account keys list --account-name ${storageAccountName} --query '[0].value' -o tsv)
+
+  # If the key was fetched successfully, exit the loop
+  if [ $? -eq 0 ]; then
+    break
+  fi
+
+  # If not, wait and check again incrementing the time
+  ELAPSED_TIME=$((ELAPSED_TIME + WAIT_INTERVAL))
+
+  # If exceeded the maximum time, exit with error
+  if [ $ELAPSED_TIME -ge $MAX_WAIT ]; then
+    exit 1
+  fi
+
+  # Wait before the next check
+  sleep $WAIT_INTERVAL
+done
+set -e
 AZURE_CONTAINER_NAME="${storageAccountContainerName}"
 
 sed -i "s|AZURE_ACCOUNT_NAME=.*|AZURE_ACCOUNT_NAME=$AZURE_ACCOUNT_NAME|" "${CLUSTER_CONFIG_DIR}/openvidu.env"
@@ -747,7 +787,7 @@ var userDataParamsMasterNode = {
 }
 
 var userDataTemplateMasterNode = '''
-#!/bin/bash -x
+#!/bin/bash
 set -eu -o pipefail
 
 # Introduce the scripts in the instance
@@ -802,8 +842,6 @@ az login --identity --allow-no-subscriptions
 
 echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
 
-apt-get update && apt-get install -y
-
 export HOME="/root"
 
 # Install OpenVidu
@@ -821,15 +859,14 @@ systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; exit 1;
 # Launch on reboot
 echo "@reboot /usr/local/bin/restart.sh >> /var/log/openvidu-restart.log" 2>&1 | crontab
 
-set +e
-az storage blob upload --account-name ${storageAccountName} --container-name automation-locks --name lock.txt --file /dev/null --auth-mode key
-set -e
+# check_app_ready.sh internally caps its wait at 1200s
+/usr/local/bin/check_app_ready.sh || { echo "[OpenVidu] master node did not become healthy"; exit 1; }
 
 az keyvault secret set --vault-name ${keyVaultName} --name FINISH-MASTER-NODE --value "true"
 
-# Wait for the app
-sleep 150
-/usr/local/bin/check_app_ready.sh
+set +e
+az storage blob upload --account-name ${storageAccountName} --container-name automation-locks --name lock.txt --file /dev/null --auth-mode key
+set -e
 '''
 
 var userDataMasterNode = reduce(
@@ -880,7 +917,7 @@ var stringInterpolationParamsMedia = {
 }
 
 var installScriptTemplateMedia = '''
-#!/bin/bash -x
+#!/bin/bash
 set -e
 DOMAIN=
 
@@ -896,26 +933,21 @@ apt-get update && apt-get install -y \
 # Get own private IP
 PRIVATE_IP=$(curl -H Metadata:true --noproxy "*" "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/privateIpAddress?api-version=2017-08-01&format=text")
 
-WAIT_INTERVAL=1
-MAX_WAIT=200
-ELAPSED_TIME=0
+# Gate 1: wait for master secrets before installing
+WAIT_INTERVAL=5
+MAX_RETRIES=360
+RETRIES=0
 set +e
 while true; do
-  # get secret value
-  FINISH_MASTER_NODE=$(az keyvault secret show --vault-name ${keyVaultName} --name FINISH-MASTER-NODE --query value -o tsv)
-
-  # Check if the secret has been generated
-  if [ "$FINISH_MASTER_NODE" == "true" ]; then
+  ALL_SECRETS_GENERATED=$(az keyvault secret show --vault-name ${keyVaultName} --name ALL-SECRETS-GENERATED --query value -o tsv 2>/dev/null)
+  if [ "$ALL_SECRETS_GENERATED" == "true" ]; then
     break
   fi
-
-  ELAPSED_TIME=$((ELAPSED_TIME + WAIT_INTERVAL))
-
-  # Check if the maximum waiting time has been reached
-  if [ $ELAPSED_TIME -ge $MAX_WAIT ]; then
+  RETRIES=$((RETRIES + 1))
+  if [ $RETRIES -ge $MAX_RETRIES ]; then
+    echo "[OpenVidu] timed out after 30 min waiting for ALL-SECRETS-GENERATED"
     exit 1
   fi
-
   sleep $WAIT_INTERVAL
 done
 set -e
@@ -929,8 +961,16 @@ OPENVIDU_VERSION="$(az keyvault secret show --vault-name ${keyVaultName} --name 
 # Get Master Node private IP
 MASTER_NODE_IP=${privateIPMasterNode}
 
+# Download to a file first: process substitution would silently run an empty script on a transient curl failure
+INSTALLER_SCRIPT="/tmp/install_ov_media_node.sh"
+curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$INSTALLER_SCRIPT" "http://get.openvidu.io/pro/elastic/$OPENVIDU_VERSION/install_ov_media_node.sh"
+if [ ! -s "$INSTALLER_SCRIPT" ]; then
+  echo "[OpenVidu] failed to download the media node installer script"
+  exit 1
+fi
+
 # Base command
-INSTALL_COMMAND="sh <(curl -fsSL http://get.openvidu.io/pro/elastic/$OPENVIDU_VERSION/install_ov_media_node.sh)"
+INSTALL_COMMAND="sh $INSTALLER_SCRIPT"
 
 # Common arguments
 COMMON_ARGS=(
@@ -1018,7 +1058,7 @@ az vmss delete-instances --resource-group $RESOURCE_GROUP_NAME --name $VM_SCALE_
 '''
 
 var userDataMediaNodeTemplate = '''
-#!/bin/bash -x
+#!/bin/bash
 set -eu -o pipefail
 
 # Introduce the scripts in the instance
@@ -1036,8 +1076,7 @@ chmod +x /usr/local/bin/delete_media_node.sh
 
 echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
 
-apt-get update && apt-get install -y
-apt-get install -y jq
+apt-get update && apt-get install -y jq
 
 # Install azure cli
 AZURE_CLI_VERSION=2.87.0
@@ -1059,7 +1098,27 @@ az vmss update --resource-group $RESOURCE_GROUP_NAME --name $VM_SCALE_SET_NAME -
 export HOME="/root"
 
 # Install OpenVidu
-/usr/local/bin/install.sh || { echo "[OpenVidu] error installing OpenVidu"; /usr/local/bin/delete_media_node.sh; }
+/usr/local/bin/install.sh || { echo "[OpenVidu] error installing OpenVidu"; /usr/local/bin/delete_media_node.sh; exit 1; }
+
+# Gate 2: wait for master readiness before starting
+WAIT_INTERVAL=5
+MAX_RETRIES=360
+RETRIES=0
+set +e
+while true; do
+  FINISH_MASTER_NODE=$(az keyvault secret show --vault-name ${keyVaultName} --name FINISH-MASTER-NODE --query value -o tsv 2>/dev/null)
+  if [ "$FINISH_MASTER_NODE" == "true" ]; then
+    break
+  fi
+  RETRIES=$((RETRIES + 1))
+  if [ $RETRIES -ge $MAX_RETRIES ]; then
+    echo "[OpenVidu] timed out after 30 min waiting for FINISH-MASTER-NODE"
+    /usr/local/bin/delete_media_node.sh
+    exit 1
+  fi
+  sleep $WAIT_INTERVAL
+done
+set -e
 
 # Start OpenVidu
 systemctl start openvidu || { echo "[OpenVidu] error starting OpenVidu"; /usr/local/bin/delete_media_node.sh; }
@@ -1095,6 +1154,7 @@ var userDataParamsMedia = {
   base64delete: base64delete_mediaNode_ScriptMedia
   resourceGroupName: resourceGroup().name
   vmScaleSetName: '${stackName}-mediaNodeScaleSet'
+  keyVaultName: keyVaultName
 }
 
 var userDataMediaNode = reduce(
