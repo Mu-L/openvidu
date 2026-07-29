@@ -158,6 +158,19 @@ var tenantId = subscription().tenantId
 
 var deploymentUser = az.deployer().objectId
 
+/*------------------------------------------- MANAGED IDENTITIES -------------------------------------------*/
+
+// Split in two identities to keep the permission asymmetry: masters write secrets, media nodes only read them
+resource masterIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${stackName}-master-identity'
+  location: location
+}
+
+resource mediaIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${stackName}-media-identity'
+  location: location
+}
+
 /*------------------------------------------- KEY VAULT -------------------------------------------*/
 
 resource openviduSharedInfo 'Microsoft.KeyVault/vaults@2023-07-01' = {
@@ -170,36 +183,16 @@ resource openviduSharedInfo 'Microsoft.KeyVault/vaults@2023-07-01' = {
     tenantId: tenantId
     enableSoftDelete: false
     accessPolicies: [
+      // Pre-created identities: the vault no longer waits for the VMs to exist
       {
-        objectId: openviduMasterNode1.identity.principalId
+        objectId: masterIdentity.properties.principalId
         tenantId: tenantId
         permissions: {
           secrets: ['get', 'set', 'list']
         }
       }
       {
-        objectId: openviduMasterNode2.identity.principalId
-        tenantId: tenantId
-        permissions: {
-          secrets: ['get', 'set', 'list']
-        }
-      }
-      {
-        objectId: openviduMasterNode3.identity.principalId
-        tenantId: tenantId
-        permissions: {
-          secrets: ['get', 'set', 'list']
-        }
-      }
-      {
-        objectId: openviduMasterNode4.identity.principalId
-        tenantId: tenantId
-        permissions: {
-          secrets: ['get', 'set', 'list']
-        }
-      }
-      {
-        objectId: openviduScaleSetMediaNode.identity.principalId
+        objectId: mediaIdentity.properties.principalId
         tenantId: tenantId
         permissions: {
           secrets: ['get']
@@ -237,6 +230,7 @@ var stringInterpolationParamsMaster1 = {
   initialMeetAdminPassword: initialMeetAdminPassword
   initialMeetApiKey: initialMeetApiKey
   keyVaultName: keyVaultName
+  masterIdentityClientId: masterIdentity.properties.clientId
   masterNodeNum: '1'
   additionalInstallFlags: additionalInstallFlags
 }
@@ -252,6 +246,7 @@ var stringInterpolationParamsMaster2 = {
   initialMeetAdminPassword: initialMeetAdminPassword
   initialMeetApiKey: initialMeetApiKey
   keyVaultName: keyVaultName
+  masterIdentityClientId: masterIdentity.properties.clientId
   masterNodeNum: '2'
   additionalInstallFlags: additionalInstallFlags
 }
@@ -267,6 +262,7 @@ var stringInterpolationParamsMaster3 = {
   initialMeetAdminPassword: initialMeetAdminPassword
   initialMeetApiKey: initialMeetApiKey
   keyVaultName: keyVaultName
+  masterIdentityClientId: masterIdentity.properties.clientId
   masterNodeNum: '3'
   additionalInstallFlags: additionalInstallFlags
 }
@@ -282,6 +278,7 @@ var stringInterpolationParamsMaster4 = {
   initialMeetAdminPassword: initialMeetAdminPassword
   initialMeetApiKey: initialMeetApiKey
   keyVaultName: keyVaultName
+  masterIdentityClientId: masterIdentity.properties.clientId
   masterNodeNum: '4'
   additionalInstallFlags: additionalInstallFlags
 }
@@ -551,7 +548,7 @@ var after_installScriptTemplateMaster = '''
 #!/bin/bash
 set -e
 
-az login --identity --allow-no-subscriptions > /dev/null
+az login --identity --client-id ${masterIdentityClientId} --allow-no-subscriptions > /dev/null
 
 # Generate URLs
 DOMAIN=$(az keyvault secret show --vault-name ${keyVaultName} --name DOMAIN-NAME --query value -o tsv)
@@ -579,7 +576,7 @@ var update_config_from_secretScriptTemplateMaster = '''
 #!/bin/bash
 set -e
 
-az login --identity --allow-no-subscriptions > /dev/null
+az login --identity --client-id ${masterIdentityClientId} --allow-no-subscriptions > /dev/null
 
 # Installation directory
 INSTALL_DIR="/opt/openvidu"
@@ -658,7 +655,7 @@ var update_secret_from_configScriptTemplateMaster = '''
 #!/bin/bash
 set -e
 
-az login --identity --allow-no-subscriptions > /dev/null
+az login --identity --client-id ${masterIdentityClientId} --allow-no-subscriptions > /dev/null
 
 # Installation directory
 INSTALL_DIR="/opt/openvidu"
@@ -751,7 +748,7 @@ var store_secretScriptTemplateMaster = '''
 #!/bin/bash
 set -e
 
-az login --identity --allow-no-subscriptions > /dev/null
+az login --identity --client-id ${masterIdentityClientId} --allow-no-subscriptions > /dev/null
 
 # Modes: save, generate
 # save mode: save the secret in the secret manager
@@ -789,7 +786,7 @@ fi
 
 var get_public_ip = '''
 #!/bin/bash
-az login --identity --allow-no-subscriptions > /dev/null
+az login --identity --client-id ${masterIdentityClientId} --allow-no-subscriptions > /dev/null
 
 az network public-ip show \
   --id ${publicIPId} \
@@ -842,7 +839,7 @@ WAIT_INTERVAL=1
 ELAPSED_TIME=0
 set +e
 while true; do
-  az login --identity
+  az login --identity --client-id ${masterIdentityClientId}
 
   # Config azure blob storage
   AZURE_ACCOUNT_NAME="${storageAccountName}"
@@ -927,6 +924,7 @@ var store_secretScriptMaster = reduce(
 ).value
 
 var blobStorageParams = {
+  masterIdentityClientId: masterIdentity.properties.clientId
   storageAccountName: isEmptyStorageAccountName ? storageAccount.name : existingStorageAccount.name
   storageAccountKey: listKeys(storageAccount.id, '2021-04-01').keys[0].value
   storageAccountContainerName: isEmptyAppDataContainerName ? 'openvidu-appdata' : '${appDataContainerName}'
@@ -963,6 +961,7 @@ var userDataParamsMasterNode1 = {
   base64check_app_ready: base64check_app_readyMaster
   base64restart: base64restartMaster
   keyVaultName: keyVaultName
+  masterIdentityClientId: masterIdentity.properties.clientId
   masterNodeNum: '1'
   base64config_blobStorage: base64config_blobStorage
 }
@@ -978,6 +977,7 @@ var userDataParamsMasterNode2 = {
   base64check_app_ready: base64check_app_readyMaster
   base64restart: base64restartMaster
   keyVaultName: keyVaultName
+  masterIdentityClientId: masterIdentity.properties.clientId
   masterNodeNum: '2'
   base64config_blobStorage: base64config_blobStorage
 }
@@ -993,6 +993,7 @@ var userDataParamsMasterNode3 = {
   base64check_app_ready: base64check_app_readyMaster
   base64restart: base64restartMaster
   keyVaultName: keyVaultName
+  masterIdentityClientId: masterIdentity.properties.clientId
   masterNodeNum: '3'
   base64config_blobStorage: base64config_blobStorage
 }
@@ -1008,6 +1009,7 @@ var userDataParamsMasterNode4 = {
   base64check_app_ready: base64check_app_readyMaster
   base64restart: base64restartMaster
   keyVaultName: keyVaultName
+  masterIdentityClientId: masterIdentity.properties.clientId
   masterNodeNum: '4'
   storageAccountName: isEmptyStorageAccountName ? storageAccount.name : existingStorageAccount.name
   base64config_blobStorage: base64config_blobStorage
@@ -1058,14 +1060,14 @@ echo ${base64config_blobStorage} | base64 -d > /usr/local/bin/config_blobStorage
 chmod +x /usr/local/bin/config_blobStorage.sh
 
 # Install azure cli
-AZURE_CLI_VERSION=2.87.0
+AZURE_CLI_VERSION=2.88.0
 apt-get install -y apt-transport-https ca-certificates gnupg lsb-release
 curl -sLS https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/microsoft.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/trusted.gpg.d/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/azure-cli.list
 apt-get update
 apt-get install -y azure-cli=${AZURE_CLI_VERSION}-1~$(lsb_release -cs)
 
-az login --identity --allow-no-subscriptions
+az login --identity --client-id ${masterIdentityClientId} --allow-no-subscriptions
 
 echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
 
@@ -1127,7 +1129,12 @@ var userDataMasterNode4 = reduce(
 resource openviduMasterNode1 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: '${stackName}-VM-MasterNode1'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${masterIdentity.id}': {}
+    }
+  }
   properties: {
     hardwareProfile: {
       vmSize: masterNodeInstanceType
@@ -1161,7 +1168,12 @@ resource openviduMasterNode1 'Microsoft.Compute/virtualMachines@2023-09-01' = {
 resource openviduMasterNode2 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: '${stackName}-VM-MasterNode2'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${masterIdentity.id}': {}
+    }
+  }
   properties: {
     hardwareProfile: {
       vmSize: masterNodeInstanceType
@@ -1195,7 +1207,12 @@ resource openviduMasterNode2 'Microsoft.Compute/virtualMachines@2023-09-01' = {
 resource openviduMasterNode3 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: '${stackName}-VM-MasterNode3'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${masterIdentity.id}': {}
+    }
+  }
   properties: {
     hardwareProfile: {
       vmSize: masterNodeInstanceType
@@ -1229,7 +1246,12 @@ resource openviduMasterNode3 'Microsoft.Compute/virtualMachines@2023-09-01' = {
 resource openviduMasterNode4 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: '${stackName}-VM-MasterNode4'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${masterIdentity.id}': {}
+    }
+  }
   properties: {
     hardwareProfile: {
       vmSize: masterNodeInstanceType
@@ -1362,6 +1384,7 @@ exec bash -c "$FINAL_COMMAND"
 '''
 
 var stopMediaNodeParams = {
+  mediaIdentityClientId: mediaIdentity.properties.clientId
   subscriptionId: subscription().subscriptionId
   resourceGroupName: resourceGroup().name
   vmScaleSetName: '${stackName}-mediaNodeScaleSet'
@@ -1397,7 +1420,7 @@ if [ -x "$(command -v docker)" ]; then
   done
 fi
 
-az login --identity
+az login --identity --client-id ${mediaIdentityClientId}
 
 RESOURCE_GROUP_NAME=${resourceGroupName}
 VM_SCALE_SET_NAME=${vmScaleSetName}
@@ -1416,7 +1439,7 @@ var delete_mediaNode_ScriptMediaTemplate = '''
 #!/bin/bash
 set -e
 
-az login --identity
+az login --identity --client-id ${mediaIdentityClientId}
 
 RESOURCE_GROUP_NAME=${resourceGroupName}
 VM_SCALE_SET_NAME=${vmScaleSetName}
@@ -1449,14 +1472,14 @@ echo "DPkg::Lock::Timeout \"-1\";" > /etc/apt/apt.conf.d/99timeout
 apt-get update && apt-get install -y jq
 
 # Install azure cli
-AZURE_CLI_VERSION=2.87.0
+AZURE_CLI_VERSION=2.88.0
 apt-get install -y apt-transport-https ca-certificates gnupg lsb-release
 curl -sLS https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/microsoft.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/trusted.gpg.d/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/azure-cli.list
 apt-get update
 apt-get install -y azure-cli=${AZURE_CLI_VERSION}-1~$(lsb_release -cs)
 
-az login --identity
+az login --identity --client-id ${mediaIdentityClientId}
 
 # Protect from scale in actions
 RESOURCE_GROUP_NAME=${resourceGroupName}
@@ -1520,6 +1543,7 @@ var userDataParamsMedia = {
   base64install: base64installMedia
   base64stop: base64stopMediaNode
   base64delete_mediaNode: base64delete_mediaNode_ScriptMedia
+  mediaIdentityClientId: mediaIdentity.properties.clientId
   resourceGroupName: resourceGroup().name
   vmScaleSetName: '${stackName}-mediaNodeScaleSet'
   keyVaultName: keyVaultName
@@ -1541,7 +1565,12 @@ resource openviduScaleSetMediaNode 'Microsoft.Compute/virtualMachineScaleSets@20
     InstanceDeleteTime: datetime
     storageAccount: isEmptyStorageAccountName ? storageAccount.name : existingStorageAccount.name
   }
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${mediaIdentity.id}': {}
+    }
+  }
   sku: {
     name: mediaNodeInstanceType
     tier: 'Standard'
@@ -1670,67 +1699,29 @@ resource openviduAutoScaleSettingsMediaNode 'Microsoft.Insights/autoscaleSetting
 
 /*------------------------------------------- SCALE IN ------------------------------------------*/
 
-resource roleAssignmentMasterNode1 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid('roleAssignmentForMasterNode${openviduMasterNode1.name}')
+// One assignment for the shared master identity replaces the four per-VM ones
+resource roleAssignmentMasterNodes 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid('roleAssignmentForMasterNodes', masterIdentity.id)
   scope: resourceGroup()
   properties: {
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
       'b24988ac-6180-42a0-ab88-20f7382dd24c'
     )
-    principalId: openviduMasterNode1.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource roleAssignmentMasterNode2 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid('roleAssignmentForMasterNode${openviduMasterNode2.name}')
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      'b24988ac-6180-42a0-ab88-20f7382dd24c'
-    )
-    principalId: openviduMasterNode2.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource roleAssignmentMasterNode3 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid('roleAssignmentForMasterNode${openviduMasterNode3.name}')
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      'b24988ac-6180-42a0-ab88-20f7382dd24c'
-    )
-    principalId: openviduMasterNode3.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource roleAssignmentMasterNode4 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid('roleAssignmentForMasterNode${openviduMasterNode4.name}')
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      'b24988ac-6180-42a0-ab88-20f7382dd24c'
-    )
-    principalId: openviduMasterNode4.identity.principalId
+    principalId: masterIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
 
 resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid('roleAssignmentForScaleSet${openviduScaleSetMediaNode.name}')
+  name: guid('roleAssignmentForScaleSet', mediaIdentity.id)
   scope: resourceGroup()
   properties: {
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
       'b24988ac-6180-42a0-ab88-20f7382dd24c'
     )
-    principalId: openviduScaleSetMediaNode.identity.principalId
+    principalId: mediaIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
