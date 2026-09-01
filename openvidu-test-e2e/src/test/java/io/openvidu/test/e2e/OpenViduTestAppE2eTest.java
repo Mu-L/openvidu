@@ -2080,6 +2080,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
 		String subscriberCodec = this.getSubscriberVideoCodec(user, subscriberVideo);
 		Assertions.assertEquals(expectedCodec, subscriberCodec);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		gracefullyLeaveParticipants(user, 2);
 	}
@@ -2159,7 +2160,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 				Assertions.assertEquals(expectedCodec,
 						getPublisherVideoLayerAttribute(chromeUser, publisherVideo, null, "codec").getAsString());
 				latch.countDown();
-				latch.await(10, TimeUnit.SECONDS);
+				latch.await(60, TimeUnit.SECONDS);
 				gracefullyLeaveParticipants(chromeUser, 1);
 			} catch (Exception e) {
 				Assertions.fail("Error while setting up Chrome publisher", e);
@@ -2187,6 +2188,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 						.findElement(By.cssSelector("#openvidu-instance-0 video.remote"));
 				String subscriberCodec = this.getSubscriberVideoCodec(firefoxUser, subscriberVideo);
 				Assertions.assertEquals(expectedCodec, subscriberCodec);
+				this.waitUntilSubscriberFramesDecodedIncrease(firefoxUser, subscriberVideo);
 				latch.countDown();
 				latch.await(10, TimeUnit.SECONDS);
 				gracefullyLeaveParticipants(firefoxUser, 1);
@@ -2347,6 +2349,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 				Assertions.assertTrue(converged,
 						subscriberBrowser + " subscriber BWE did not converge to highest layer. Last frameWidth: "
 								+ lastWidth + ". Expected: " + EXPECTED_HIGHEST_WIDTH);
+				this.waitUntilSubscriberFramesDecodedIncrease(subscriberUser, subscriberVideo);
 
 				latch.countDown();
 				latch.await(10, TimeUnit.SECONDS);
@@ -2400,6 +2403,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		this.waitUntilVideoLayersNotEmpty(user, subscriberVideo);
 		long bytesReceived = this.getSubscriberVideoBytesReceived(user, subscriberVideo);
 		this.waitUntilSubscriberBytesReceivedIncrease(user, subscriberVideo, bytesReceived);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		// Unsubscribe
 		WebElement toggleSubscriptionBtn = user.getDriver()
@@ -2417,6 +2421,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		waitUntilVideoLayersNotEmpty(user, subscriberVideo);
 		bytesReceived = this.getSubscriberVideoBytesReceived(user, subscriberVideo);
 		this.waitUntilSubscriberBytesReceivedIncrease(user, subscriberVideo, bytesReceived);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		gracefullyLeaveParticipants(user, 2);
 	}
@@ -2454,6 +2459,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		long bytesReceived = this.getSubscriberVideoBytesReceived(user, subscriberVideo);
 		this.waitUntilSubscriberBytesReceivedIncrease(user, subscriberVideo, bytesReceived);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		// A disabled subscribed track does not increase its bytesReceived over time
 		WebElement enableToggle = user.getDriver()
@@ -2469,6 +2475,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		enableToggle.click();
 		this.waitUntilSubscriberBytesReceivedIncrease(user, subscriberVideo, bytesReceived);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		gracefullyLeaveParticipants(user, 2);
 	}
@@ -2516,6 +2523,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		firstSubscriberToggle.click();
 		this.waitUntilSubscriberBytesReceivedIncrease(user, subscriberVideo1, bytesReceived);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo1);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, "f", true);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, "h", true);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, "q", true);
@@ -2548,6 +2556,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo1, q);
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo2, f);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo2);
 
 		WebElement secondSubscriberToggle = user.getDriver()
 				.findElement(By.cssSelector("#openvidu-instance-2 .toggle-video-enabled"));
@@ -2728,6 +2737,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// Video quality of subscriber should be by default f
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, f);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		// Manually change video quality of subscriber to h
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
@@ -2784,6 +2794,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		int frameWidth = publishedLayer.get("frameWidth").getAsInt();
 		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, frameWidth);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		gracefullyLeaveParticipants(user, 2);
 	}
@@ -2823,6 +2834,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// Subscriber should settle in 640p
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 640);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		changeElementSize(user, subscriberVideo, 1000, 700);
 		Thread.sleep(2000);
@@ -2886,6 +2898,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 				"HTMLVideoElements were expected to have only one audio track");
 
 		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 		int frameWidth;
 
 		frameWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
@@ -2949,6 +2962,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// With adaptive stream disabled, it doesn't matter the subscription video is
 		// small. All layers will remain active
 		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 		changeElementSize(user, subscriberVideo, 100, 30);
 		Thread.sleep(4000);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, "q", true);
@@ -3019,6 +3033,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		int subscriberFrameWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 		Assertions.assertEquals(publisherActiveFrameWidth, subscriberFrameWidth,
 				"Wrong publisher and subscriber video frameWidth");
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		// All video layers should reach enabled status with a big video in the
 		// subscriber side
@@ -3088,6 +3103,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		Thread.sleep(3000);
 
 		this.waitUntilSubscriberBytesReceivedIncrease(user, subscriberVideo, bytesReceived);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, null, true);
 		this.waitUntilPublisherBytesSentIncrease(user, publisherVideo, null, bytesSent);
 
@@ -3177,6 +3193,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// Subscriber should settle in 1920x1080p
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		changeElementSize(user, subscriberVideo, 1000, 700);
 		Thread.sleep(2000);
@@ -3240,6 +3257,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// Subscriber should settle in 960
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 960);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		changeElementSize(user, subscriberVideo, 1000, 700);
 		Thread.sleep(2000);
@@ -3313,6 +3331,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
 		this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 960);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		Thread.sleep(4000);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, null, true);
@@ -3405,6 +3424,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
 		String subscriberCodec = this.getSubscriberVideoCodec(user, subscriberVideo);
 		Assertions.assertEquals("video/" + codecUpperCase, subscriberCodec);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		// Validate SVC by dynamically switching subscriber quality and checking
 		// subscriber frameWidth transitions.
@@ -4221,6 +4241,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			long bytesReceived = this.getSubscriberVideoBytesReceived(user, subscriberVideo);
 			this.waitUntilSubscriberBytesReceivedIncrease(user, subscriberVideo, bytesReceived);
 			this.waitUntilSubscriberFramesPerSecondNotZero(user, subscriberVideo);
+			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 			String subscriberCodec = this.getSubscriberVideoCodec(user, subscriberVideo);
 			String expectedCodec = "video/VP8";
 			Assertions.assertEquals(expectedCodec, subscriberCodec);
@@ -4258,6 +4279,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		long bytesReceived = this.getSubscriberVideoBytesReceived(user, subscriberVideo);
 		this.waitUntilSubscriberBytesReceivedIncrease(user, subscriberVideo, bytesReceived);
 		this.waitUntilSubscriberFramesPerSecondNotZero(user, subscriberVideo);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 		// Check subscriber's codec
 		if (codec != null) {
@@ -4330,6 +4352,10 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 	private int getSubscriberVideoFramesPerSecond(OpenViduTestappUser user, WebElement subscriberVideo) {
 		return getSubscriberVideoLayerStat(user, subscriberVideo, "framesPerSecond", JsonElement::getAsInt);
+	}
+
+	private long getSubscriberVideoFramesDecoded(OpenViduTestappUser user, WebElement subscriberVideo) {
+		return getSubscriberVideoLayerStat(user, subscriberVideo, "framesDecoded", JsonElement::getAsLong);
 	}
 
 	private String getSubscriberVideoCodec(OpenViduTestappUser user, WebElement subscriberVideo) {
@@ -4434,6 +4460,21 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		this.waitUntilAux(user, videoElement, () -> {
 			return this.getSubscriberVideoBytesReceived(user, videoElement) > previousBytesReceived;
 		}, "Timeout waiting for subscriber track to increase its bytesReceived from " + previousBytesReceived);
+	}
+
+	// A subscriber video is only properly received AND played if its decoder keeps
+	// producing new frames. Receiving bytes is not enough: a subscriber may receive
+	// media that it is not able to decode at all
+	private void waitUntilSubscriberFramesDecodedIncrease(OpenViduTestappUser user, WebElement videoElement) {
+		this.waitUntilSubscriberFramesDecodedIncrease(user, videoElement,
+				this.getSubscriberVideoFramesDecoded(user, videoElement));
+	}
+
+	private void waitUntilSubscriberFramesDecodedIncrease(OpenViduTestappUser user, WebElement videoElement,
+			final long previousFramesDecoded) {
+		this.waitUntilAux(user, videoElement, () -> {
+			return this.getSubscriberVideoFramesDecoded(user, videoElement) > previousFramesDecoded;
+		}, "Timeout waiting for subscriber track to increase its framesDecoded from " + previousFramesDecoded);
 	}
 
 	private void waitUntilPublisherBytesSentIncrease(OpenViduTestappUser user, WebElement videoElement, String rid,

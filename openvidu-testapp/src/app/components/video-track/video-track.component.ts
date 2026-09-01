@@ -110,6 +110,7 @@ export class VideoTrackComponent extends TrackComponent {
             frameWidth: report.frameWidth,
             frameHeight: report.frameHeight,
             framesPerSecond: report.framesPerSecond,
+            framesDecoded: report.framesDecoded,
             bytesReceived: report.bytesReceived,
             bytesSent: report.bytesSent,
           });
