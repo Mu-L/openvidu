@@ -54,7 +54,8 @@
 		<version.surefire.plugin>3.5.4</version.surefire.plugin>
 		<version.selenium>4.41.0</version.selenium>
 		<version.gson>2.13.2</version.gson>
-		<version.livekit-server>0.10.1</version.livekit-server>
+		<version.livekit-server>0.15.1</version.livekit-server>
+		<version.jackson>2.22.2</version.jackson>
 		<version.testcontainers>2.0.3</version.testcontainers>
 		<version.dockerjava>3.7.0</version.dockerjava>
 		<version.stringsimilarity>2.0.0</version.stringsimilarity>
@@ -62,6 +63,20 @@
 		<version.minio>8.6.0</version.minio>
 		<version.okhttp>5.3.2</version.okhttp>
 	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<!-- Align every Jackson artifact: livekit-server (java-jwt) and other dependencies
+			     pull different Jackson versions, which breaks JWT creation at runtime -->
+			<dependency>
+				<groupId>com.fasterxml.jackson</groupId>
+				<artifactId>jackson-bom</artifactId>
+				<version>${version.jackson}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
 	<build>
 		<plugins>
