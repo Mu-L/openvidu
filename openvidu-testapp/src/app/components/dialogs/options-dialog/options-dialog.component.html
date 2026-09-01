@@ -216,6 +216,14 @@
             }
           </mat-select>
         </mat-form-field>
+        <mat-form-field id="trackPublish-degradationPreference">
+          <mat-label>degradationPreference</mat-label>
+          <mat-select [(value)]="trackPublishOptions.degradationPreference">
+            @for (pref of ['balanced','maintain-framerate','maintain-resolution']; track pref) {
+              <mat-option [value]="pref" [ngClass]="'degradation-' + pref">{{pref}}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
         <mat-form-field id="trackPublish-videoSimulcastLayers">
           <mat-label>videoSimulcastLayers</mat-label>
           <mat-select multiple [(value)]="trackPublishOptions.videoSimulcastLayers" [compareWith]="compareVideoPresets">

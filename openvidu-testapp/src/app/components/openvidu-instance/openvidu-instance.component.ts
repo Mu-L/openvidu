@@ -124,6 +124,12 @@ export class OpenviduInstanceComponent {
         frameRate: 30,
       },
     },
+    publishDefaults: {
+      // maintain-resolution keeps simulcast/SVC layer sizes deterministic under
+      // CPU load (the browser drops framerate instead of rescaling every layer),
+      // which the e2e tests rely on when asserting received layer widths.
+      degradationPreference: 'maintain-resolution',
+    },
     singlePeerConnection: false
   };
   roomConnectOptions: RoomConnectOptions = {
@@ -1658,7 +1664,7 @@ export class OpenviduInstanceComponent {
       let selectedCandidatePairId: string = '';
       const stats: any = await new Promise((res) => {
         const reports_stats: any[] = [];
-        pcTransport.getStats().then((stats: any) => {
+        pcTransport.getStats()?.then((stats: any) => {
           stats.forEach((report: any) => {
             console.log('Report Type:', report.type);
             if (report.type === 'transport') {
