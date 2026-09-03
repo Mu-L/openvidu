@@ -3118,6 +3118,8 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		long bytesReceived = this.getSubscriberVideoBytesReceived(user, subscriberVideo);
 		long bytesSent = this.getPublisherVideoLayerAttribute(user, publisherVideo, null, "bytesSent").getAsLong();
+		long framesEncoded = this.getPublisherVideoLayerAttribute(user, publisherVideo, null, "framesEncoded")
+				.getAsLong();
 
 		Thread.sleep(3000);
 
@@ -3125,6 +3127,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, null, true);
 		this.waitUntilPublisherBytesSentIncrease(user, publisherVideo, null, bytesSent);
+		this.waitUntilPublisherFramesEncodedIncrease(user, publisherVideo, null, framesEncoded);
 
 		gracefullyLeaveParticipants(user, 2);
 	}
@@ -3351,8 +3354,13 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 960);
 		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
+		long framesEncoded = this.getPublisherVideoLayerAttribute(user, publisherVideo, null, "framesEncoded")
+				.getAsLong();
+
 		Thread.sleep(4000);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, null, true);
+		// And active means actually encoding, not just a layer flagged as active
+		this.waitUntilPublisherFramesEncodedIncrease(user, publisherVideo, null, framesEncoded);
 
 		// Only after pausing the subscriber track, the entire SVC stream should reach
 		// inactive state in publisher
@@ -3388,8 +3396,12 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// With no subscribers and dynacast disabled, the SVC stream should remain
 		// active in publisher
 		this.waitUntilPublisherLayerActive(user, publisherVideo, null, true);
+		long framesEncoded = this.getPublisherVideoLayerAttribute(user, publisherVideo, null, "framesEncoded")
+				.getAsLong();
 		Thread.sleep(8000);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, null, true);
+		// And active means actually encoding, not just a layer flagged as active
+		this.waitUntilPublisherFramesEncodedIncrease(user, publisherVideo, null, framesEncoded);
 
 		gracefullyLeaveParticipants(user, 1);
 	}
@@ -4851,6 +4863,10 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		return getSubscriberVideoLayerStat(user, subscriberVideo, "framesDecoded", JsonElement::getAsLong);
 	}
 
+	private long getSubscriberVideoFramesReceived(OpenViduTestappUser user, WebElement subscriberVideo) {
+		return getSubscriberVideoLayerStat(user, subscriberVideo, "framesReceived", JsonElement::getAsLong);
+	}
+
 	private String getSubscriberVideoCodec(OpenViduTestappUser user, WebElement subscriberVideo) {
 		return getSubscriberVideoLayerStat(user, subscriberVideo, "codec", JsonElement::getAsString);
 	}
@@ -4877,6 +4893,20 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			Assertions.fail("Timeout waiting for " + field + " to exist");
 		}
 		return extractor.apply(element);
+	}
+
+	// Several stats of the same subscriber layer, taken from a single info dialog
+	// update. Sampling them one by one through getSubscriberVideoLayerStat would pay
+	// a full dialog read, and a stats refresh, for each one of them
+	private JsonObject getSubscriberVideoLayer(OpenViduTestappUser user, WebElement subscriberVideo) {
+		JsonArray layers = this.getLayersAsJsonArray(user, subscriberVideo);
+		return layers.isEmpty() ? new JsonObject() : layers.get(0).getAsJsonObject();
+	}
+
+	// Cumulative counter of the given layer, or -1 if it is not there
+	private long getLayerCounter(JsonObject layer, String field) {
+		JsonElement element = layer.get(field);
+		return element == null || element.isJsonNull() ? -1 : element.getAsLong();
 	}
 
 	// If rid is null, retrieve the first layer
@@ -4973,25 +5003,56 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	// MIN_FRAMES_DECODED_WINDOW_MILLIS
 	private void waitUntilSubscriberFramesDecodedIncrease(OpenViduTestappUser user, WebElement videoElement) {
 		final long initialFramesDecoded = this.getSubscriberVideoFramesDecoded(user, videoElement);
+		final long initialFramesReceived = this.getSubscriberVideoFramesReceived(user, videoElement);
 		final long windowStart = System.currentTimeMillis();
 		// Last sample taken by the loop, only to report it if the wait times out
 		final java.util.concurrent.atomic.AtomicLong lastFramesDecoded = new java.util.concurrent.atomic.AtomicLong();
+		final java.util.concurrent.atomic.AtomicLong lastFramesReceived = new java.util.concurrent.atomic.AtomicLong();
 		final java.util.concurrent.atomic.AtomicLong lastWindowMillis = new java.util.concurrent.atomic.AtomicLong();
 		this.waitUntilAux(user, videoElement, () -> {
-			long framesDecoded = this.getSubscriberVideoFramesDecoded(user, videoElement) - initialFramesDecoded;
+			// Both counters must come from the very same dialog update: sampling
+			// them one by one would double the cost of every iteration
+			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			long framesDecoded = this.getLayerCounter(layer, "framesDecoded");
+			long framesReceived = this.getLayerCounter(layer, "framesReceived");
+			if (framesDecoded < 0 || framesReceived < 0) {
+				return false;
+			}
 			long windowMillis = System.currentTimeMillis() - windowStart;
-			lastFramesDecoded.set(framesDecoded);
+			lastFramesDecoded.set(framesDecoded - initialFramesDecoded);
+			lastFramesReceived.set(framesReceived - initialFramesReceived);
 			lastWindowMillis.set(windowMillis);
 			// The window keeps growing while waiting, so a video that decodes a
 			// frame every now and then falls further behind the required rate
 			// instead of eventually satisfying it
 			return windowMillis >= MIN_FRAMES_DECODED_WINDOW_MILLIS
-					&& framesDecoded * 1000 >= MIN_FRAMES_DECODED_FPS * windowMillis;
-		}, () -> "Timeout waiting for subscriber track to decode video at a sustained frame rate: only "
-				+ lastFramesDecoded.get() + " frame(s) decoded in " + lastWindowMillis.get() + " ms ("
-				+ String.format("%.2f", lastFramesDecoded.get() * 1000d / Math.max(1, lastWindowMillis.get()))
-				+ " fps), while at least " + MIN_FRAMES_DECODED_FPS
-				+ " fps are required. Such a subscriber video is a frozen video");
+					&& lastFramesDecoded.get() * 1000 >= MIN_FRAMES_DECODED_FPS * windowMillis;
+		}, () -> {
+			long framesDecoded = lastFramesDecoded.get();
+			long framesReceived = lastFramesReceived.get();
+			long windowMillis = lastWindowMillis.get();
+			// framesReceived counts the frames the depacketizer assembled, before
+			// handing them to the decoder. Comparing it against framesDecoded tells
+			// apart three failures that otherwise all look like "no video"
+			String diagnosis;
+			if (framesReceived <= 0) {
+				diagnosis = "The subscriber is not receiving assembled frames at all:"
+						+ " the media is not reaching it";
+			} else if (framesDecoded <= 0) {
+				diagnosis = "The subscriber IS receiving assembled frames (" + framesReceived
+						+ ") but decoded none of them: the media that reaches it is undecodable"
+						+ " (a Producer bound to the wrong codec, or a missing or wrong dependency"
+						+ " descriptor)";
+			} else {
+				diagnosis = "The subscriber received " + framesReceived + " assembled frame(s) and decoded "
+						+ framesDecoded + " of them, but too slowly for a video that is actually playing";
+			}
+			return "Timeout waiting for subscriber track to decode video at a sustained frame rate: only "
+					+ framesDecoded + " frame(s) decoded in " + windowMillis + " ms ("
+					+ String.format("%.2f", framesDecoded * 1000d / Math.max(1, windowMillis))
+					+ " fps), while at least " + MIN_FRAMES_DECODED_FPS
+					+ " fps are required. Such a subscriber video is a frozen video. " + diagnosis;
+		});
 	}
 
 	private void waitUntilPublisherBytesSentIncrease(OpenViduTestappUser user, WebElement videoElement, String rid,
@@ -5000,6 +5061,14 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			return this.getPublisherVideoLayerAttribute(user, videoElement, rid, "bytesSent")
 					.getAsLong() > previousBytesSent;
 		}, "Timeout waiting for publisher track to increase its bytesSent from " + previousBytesSent);
+	}
+
+	private void waitUntilPublisherFramesEncodedIncrease(OpenViduTestappUser user, WebElement videoElement, String rid,
+			final long previousFramesEncoded) {
+		this.waitUntilAux(user, videoElement, () -> {
+			return this.getPublisherVideoLayerAttribute(user, videoElement, rid, "framesEncoded")
+					.getAsLong() > previousFramesEncoded;
+		}, "Timeout waiting for publisher track to increase its framesEncoded from " + previousFramesEncoded);
 	}
 
 	private void waitUntilPublisherLayerActive(OpenViduTestappUser user, final WebElement publisherVideo,
@@ -5124,8 +5193,15 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			user.getDriver().findElement(By.id("close-dialog-btn")).click();
 			Thread.sleep(300);
 		}
+		final int previousInstances = user.getDriver().findElements(By.cssSelector("app-openvidu-instance")).size();
 		user.getDriver().findElement(By.id("add-user-btn")).click();
-		int numberOfUser = user.getDriver().findElements(By.cssSelector("app-openvidu-instance")).size() - 1;
+		// The new instance is rendered asynchronously: counting the instances right
+		// after the click can still see only the previous ones, and then every
+		// "#openvidu-instance-<index>" selector built from that count is off by one
+		// (with a single instance it even becomes "#openvidu-instance--1")
+		user.getWaiter().until(ExpectedConditions.numberOfElementsToBe(By.cssSelector("app-openvidu-instance"),
+				previousInstances + 1));
+		int numberOfUser = previousInstances;
 		if (!isSubscriber) {
 			user.getDriver().findElement(By.cssSelector("#openvidu-instance-" + numberOfUser + " .subscriber-checkbox"))
 					.click();
@@ -5163,8 +5239,15 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			user.getDriver().findElement(By.id("close-dialog-btn")).click();
 			Thread.sleep(300);
 		}
+		final int previousInstances = user.getDriver().findElements(By.cssSelector("app-openvidu-instance")).size();
 		user.getDriver().findElement(By.id("add-user-btn")).click();
-		int numberOfUser = user.getDriver().findElements(By.cssSelector("app-openvidu-instance")).size() - 1;
+		// The new instance is rendered asynchronously: counting the instances right
+		// after the click can still see only the previous ones, and then every
+		// "#openvidu-instance-<index>" selector built from that count is off by one
+		// (with a single instance it even becomes "#openvidu-instance--1")
+		user.getWaiter().until(ExpectedConditions.numberOfElementsToBe(By.cssSelector("app-openvidu-instance"),
+				previousInstances + 1));
+		int numberOfUser = previousInstances;
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-" + numberOfUser + " .publisher-checkbox"))
 				.click();
 		if (!adaptiveStream) {
