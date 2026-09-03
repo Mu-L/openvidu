@@ -104,8 +104,6 @@ import static org.openqa.selenium.OutputType.BASE64;
 @ExtendWith(SpringExtension.class)
 public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
-	private static final long WAIT_UNTIL_MAX_MILLIS = 20000;
-
 	@BeforeAll()
 	protected static void setupAll() throws Exception {
 		checkFfmpegInstallation();
@@ -3391,61 +3389,61 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	@Test
 	@DisplayName("SVC VP9 (L1T1)")
 	void svcVP9L1T1Test() throws Exception {
-		svcTest("VP9", "L1T1", false);
+		svcTest("VP9", "L1T1");
 	}
 
 	@Test
 	@DisplayName("SVC VP9 (L2T2)")
 	void svcVP9L2T2Test() throws Exception {
-		svcTest("VP9", "L2T2", false);
+		svcTest("VP9", "L2T2");
 	}
 
 	@Test
 	@DisplayName("SVC VP9 (L2T2_KEY)")
 	void svcVP9L2T2_KEYTest() throws Exception {
-		svcTest("VP9", "L2T2_KEY", false);
+		svcTest("VP9", "L2T2_KEY");
 	}
 
 	@Test
 	@DisplayName("SVC VP9 (L3T3)")
 	void svcVP9L3T3Test() throws Exception {
-		svcTest("VP9", "L3T3", false);
+		svcTest("VP9", "L3T3");
 	}
 
 	@Test
 	@DisplayName("SVC VP9 (L3T3_KEY)")
 	void svcVP9L3T3_KEYTest() throws Exception {
-		svcTest("VP9", "L3T3_KEY", false);
+		svcTest("VP9", "L3T3_KEY");
 	}
 
 	@Test
 	@DisplayName("SVC AV1 (L1T1)")
 	void svcAV1L1T1Test() throws Exception {
-		svcTest("AV1", "L1T1", false);
+		svcTest("AV1", "L1T1");
 	}
 
 	@Test
 	@DisplayName("SVC AV1 (L2T2)")
 	void svcAV1L2T2Test() throws Exception {
-		svcTest("AV1", "L2T2", false);
+		svcTest("AV1", "L2T2");
 	}
 
 	@Test
 	@DisplayName("SVC AV1 (L2T2_KEY)")
 	void svcAV1L2T2_KEYTest() throws Exception {
-		svcTest("AV1", "L2T2_KEY", false);
+		svcTest("AV1", "L2T2_KEY");
 	}
 
 	@Test
 	@DisplayName("SVC AV1 (L3T3)")
 	void svcAV1L3T3Test() throws Exception {
-		svcTest("AV1", "L3T3", false);
+		svcTest("AV1", "L3T3");
 	}
 
 	@Test
 	@DisplayName("SVC AV1 (L3T3_KEY)")
 	void svcAV1L3T3_KEYTest() throws Exception {
-		svcTest("AV1", "L3T3_KEY", false);
+		svcTest("AV1", "L3T3_KEY");
 	}
 
 	@Test
@@ -3508,11 +3506,12 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		svcTest("AV1", "L3T3_KEY", true);
 	}
 
+	private void svcTest(String codec, String scalabilityMode) throws Exception {
+		svcTest(codec, scalabilityMode, false);
+	}
+
 	private void svcTest(String codec, String scalabilityMode, boolean adaptiveStream) throws Exception {
 		final String codecUpperCase = codec.toUpperCase();
-		final long testStart = System.currentTimeMillis();
-		log.info("[SVC] START test: codec={}, scalabilityMode={}, adaptiveStream={}", codec, scalabilityMode,
-				adaptiveStream);
 		OpenViduTestappUser user = setupBrowserAndConnectToOpenViduTestapp("chrome");
 		this.addOnlyPublisherVideo(user, false, false, true, scalabilityMode);
 		this.forceCodec(user, 0, codec);
@@ -3539,11 +3538,6 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// Validate SVC by dynamically switching subscriber quality and checking
 		// subscriber frameWidth transitions.
-		// With adaptiveStream disabled, quality is switched manually through the
-		// "max-video-quality" selector, which lets HIGH/MEDIUM/LOW be requested
-		// explicitly. With adaptiveStream enabled, that manual selector has no
-		// effect: the spatial layer is instead derived from the rendered size of
-		// the subscriber's video element
 		int spatialLayers = Integer.parseInt(scalabilityMode.substring(1, 2));
 		int highWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 		user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
@@ -3555,24 +3549,28 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		if (spatialLayers == 1) {
 			// A single spatial layer. Just ensure subscriber is properly receiving video
 			Assertions.assertTrue(highWidth > 0, "Expected a positive frameWidth, but got " + highWidth);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
+			this.waitUntilSubscriberFramesPerSecondNotZero(user, subscriberVideo);
+			this.waitUntilSubscriberBytesReceivedIncreasing(user, subscriberVideo);
 		} else if (adaptiveStream) {
-			// adaptiveStream picks the layer from the rendered size of the subscriber's
-			// video element, so drive the layer changes by resizing that element. Only
-			// two element sizes are used, so only the lowest and the highest spatial
-			// layers are observable: with 3 spatial layers the middle one is never
-			// visited. The default element size settles below the top layer, so the
-			// first switch to HIGH must increase the received width.
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "HIGH");
+			// adaptiveStream picks the layer from the video element's size, so drive the
+			// layer changes by resizing the element with the .toggle-video-zoom button
+			// (120px <-> 1500px). Only two element sizes exist, so only the lowest and the
+			// highest spatial layers are observable: with 3 spatial layers the middle one
+			// is never visited. The default element size settles below the top layer, so
+			// the first toggle (zoom in) must increase the received width.
+			WebElement zoomButton = user.getDriver()
+					.findElement(By.cssSelector("#openvidu-instance-1 .toggle-video-zoom"));
+
+			// 1. Zoom in (1500px): adaptiveStream must move to the highest spatial layer.
+			zoomButton.click();
 			this.waitUntilSubscriberFrameWidthChanges(user, subscriberVideo, highWidth, true);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 			int bigWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
 			Thread.sleep(300);
 
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "LOW");
+			// 2. Zoom out (120px): adaptiveStream must move to the lowest spatial layer.
+			zoomButton.click();
 			this.waitUntilSubscriberFrameWidthChanges(user, subscriberVideo, bigWidth, false);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 			int smallWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			Assertions.assertTrue(bigWidth > smallWidth,
 					"Expected the zoomed-in width to exceed the zoomed-out width, but got big=" + bigWidth
@@ -3580,9 +3578,9 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
 			Thread.sleep(300);
 
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "HIGH");
+			// 3. Zoom in again: back to the highest spatial layer.
+			zoomButton.click();
 			this.waitUntilSubscriberFrameWidthChanges(user, subscriberVideo, smallWidth, true);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 			int finalBigWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			Assertions.assertEquals(bigWidth, finalBigWidth,
 					"Expected the zoomed-in width to be restored, but got first=" + bigWidth + ", second="
@@ -3590,16 +3588,16 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		} else if (spatialLayers >= 3) {
 			// 3 spatial layers (e.g. L3T3_KEY): layers are LOW, MEDIUM, HIGH.
 			// HIGH → MEDIUM → LOW, each a distinct lower resolution.
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "MEDIUM");
+			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
+			this.waitForBackdropAndClick(user, "mat-option.mode-MEDIUM");
 			this.waitUntilSubscriberFrameWidthChanges(user, subscriberVideo, highWidth, false);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 			int mediumWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
 			Thread.sleep(300);
 
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "LOW");
+			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
+			this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
 			this.waitUntilSubscriberFrameWidthChanges(user, subscriberVideo, mediumWidth, false);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 			int lowWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			Assertions.assertTrue(highWidth > mediumWidth && mediumWidth > lowWidth,
 					"Expected HIGH > MEDIUM > LOW frame widths, but got HIGH=" + highWidth
@@ -3607,16 +3605,17 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
 			Thread.sleep(300);
 
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "HIGH");
+			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
+			this.waitForBackdropAndClick(user, "mat-option.mode-HIGH");
 			this.waitUntilSubscriberFrameWidthChanges(user, subscriberVideo, lowWidth, true);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 		} else if (spatialLayers == 2) {
 			// 2 spatial layers (e.g. L2T2): layers are LOW and MEDIUM only.
 			// HIGH and MEDIUM both map to the highest spatial layer (same width).
 			// Only LOW gives a distinct lower resolution.
 
 			// 1. Switch to MEDIUM: should stay at the same width as HIGH
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "MEDIUM");
+			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
+			this.waitForBackdropAndClick(user, "mat-option.mode-MEDIUM");
 			Thread.sleep(4000);
 			int mediumWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			Assertions.assertEquals(highWidth, mediumWidth,
@@ -3624,12 +3623,11 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 							+ highWidth + ", MEDIUM=" + mediumWidth);
 			user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
 			Thread.sleep(300);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
 			// 2. Switch to LOW: should decrease
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "LOW");
+			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
+			this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
 			this.waitUntilSubscriberFrameWidthChanges(user, subscriberVideo, mediumWidth, false);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 			int lowWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			Assertions.assertTrue(highWidth > lowWidth,
 					"Expected HIGH > LOW frame widths, but got HIGH=" + highWidth + ", LOW=" + lowWidth);
@@ -3637,48 +3635,23 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			Thread.sleep(300);
 
 			// 3. Switch to MEDIUM: should increase back to highest spatial layer
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "MEDIUM");
+			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
+			this.waitForBackdropAndClick(user, "mat-option.mode-MEDIUM");
 			this.waitUntilSubscriberFrameWidthChanges(user, subscriberVideo, lowWidth, true);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 			int mediumWidth2 = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
 			Thread.sleep(300);
 
 			// 4. Switch to HIGH: should stay at the same width as MEDIUM
-			this.switchSubscriberSpatialLayer(user, subscriberVideo, adaptiveStream, "HIGH");
+			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
+			this.waitForBackdropAndClick(user, "mat-option.mode-HIGH");
 			Thread.sleep(4000);
 			int finalHighWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 			Assertions.assertEquals(mediumWidth2, finalHighWidth,
 					"With " + spatialLayers + " spatial layers, HIGH should equal MEDIUM width, but got MEDIUM="
 							+ mediumWidth2 + ", HIGH=" + finalHighWidth);
-			this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 		}
-
 		gracefullyLeaveParticipants(user, 2);
-
-		log.info("[SVC] END test: codec={}, scalabilityMode={}, adaptiveStream={}, totalDuration={} ms", codec,
-				scalabilityMode, adaptiveStream, System.currentTimeMillis() - testStart);
-	}
-
-	// With adaptiveStream disabled, the subscriber's preferred quality is
-	// switched manually through the "max-video-quality" selector. With
-	// adaptiveStream enabled, that manual selector is ignored by the client SDK,
-	// which instead derives the desired spatial layer from the rendered size of
-	// the subscriber's video element, always picking the smallest layer that is
-	// sufficient for that size. Only "LOW" (small element) and "HIGH" (large
-	// element) are meaningful in that case.
-	private void switchSubscriberSpatialLayer(OpenViduTestappUser user, WebElement subscriberVideo,
-			boolean adaptiveStream, String quality) {
-		if (adaptiveStream) {
-			if ("LOW".equals(quality)) {
-				changeElementSize(user, subscriberVideo, 80, 100);
-			} else {
-				changeElementSize(user, subscriberVideo, 1000, 700);
-			}
-		} else {
-			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
-			this.waitForBackdropAndClick(user, "mat-option.mode-" + quality);
-		}
 	}
 
 	@Test
@@ -4849,26 +4822,18 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 	private <T> T getSubscriberVideoLayerStat(OpenViduTestappUser user, WebElement subscriberVideo, String field,
 			java.util.function.Function<JsonElement, T> extractor) {
-		final long deadline = System.currentTimeMillis() + WAIT_UNTIL_MAX_MILLIS;
-		JsonElement element = null;
-		do {
-			try {
-				element = getLayersAsJsonArray(user, subscriberVideo).get(0).getAsJsonObject().get(field);
-			} catch (Exception e) {
-				element = null;
+		waitUntilVideoLayersNotEmpty(user, subscriberVideo);
+		final java.util.concurrent.atomic.AtomicReference<T> value = new java.util.concurrent.atomic.AtomicReference<>();
+		this.waitUntilAux(user, subscriberVideo, () -> {
+			JsonElement element = getLayersAsJsonArray(user, subscriberVideo).get(0).getAsJsonObject().get(field);
+			if (element != null && !element.isJsonNull()) {
+				value.set(extractor.apply(element));
+				return true;
 			}
-			if (element == null || element.isJsonNull()) {
-				try {
-					Thread.sleep(250);
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-				}
-			}
-		} while ((element == null || element.isJsonNull()) && System.currentTimeMillis() < deadline);
-		if (element == null || element.isJsonNull()) {
-			Assertions.fail("Timeout waiting for " + field + " to exist");
-		}
-		return extractor.apply(element);
+			return false;
+		}, "Timeout waiting for " + field + " to exist");
+		openInfoDialog(user, subscriberVideo);
+		return value.get();
 	}
 
 	// If rid is null, retrieve the first layer
@@ -4899,10 +4864,10 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	}
 
 	private void waitUntilVideoLayersNotEmpty(OpenViduTestappUser user, WebElement videoElement) {
-		this.waitUntilAux(user, videoElement, () -> {
-			String value = getLayersAsString(user, videoElement);
-			return !value.isBlank() && !JsonParser.parseString(value).getAsJsonArray().isEmpty();
-		}, "Timeout waiting video layers to not be empty");
+		this.waitUntilAux(user, videoElement,
+				() -> !getLayersAsString(user, videoElement).isBlank()
+						&& !getLayersAsJsonArray(user, videoElement).isEmpty(),
+				"Timeout waiting video layers to not be empty");
 	}
 
 	private void waitUntilSubscriberFramesPerSecondNotZero(OpenViduTestappUser user, WebElement videoElement) {
@@ -4995,10 +4960,13 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	private void waitUntilAux(OpenViduTestappUser user, WebElement videoElement,
 			Callable<Boolean> breakFromLoopFunction, String errMsg) {
 		try {
-			final long intervalWait = 250;
-			final long deadline = System.currentTimeMillis() + WAIT_UNTIL_MAX_MILLIS;
+			final int maxWaitMillis = 6000;
+			final int intervalWait = 250;
+			final int MAX_ITERATIONS = maxWaitMillis / intervalWait;
+			int iteration = 0;
 			boolean breakFromLoop = false;
-			while (!breakFromLoop && System.currentTimeMillis() < deadline) {
+			while (!breakFromLoop && iteration < MAX_ITERATIONS) {
+				iteration++;
 				try {
 					breakFromLoop = breakFromLoopFunction.call();
 				} catch (Exception e1) {
@@ -5033,28 +5001,21 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	private void openInfoDialog(OpenViduTestappUser user, WebElement video) {
 		String videoId = video.getDomProperty("id");
 		// Open the track info dialog if required
-		boolean dialogWasOpened;
 		if (!user.getDriver().findElements(By.cssSelector("app-info-dialog")).isEmpty()) {
 			// Dialog already opened
 			if (!user.getDriver().findElement(By.cssSelector("#subtitle")).getText().equals(videoId)) {
 				// Wrong dialog
 				this.waitForBackdropAndClick(user, "#close-dialog-btn");
 				this.waitForBackdropAndClick(user, "#" + videoId + " ~ .bottom-div .video-track-info");
-				dialogWasOpened = true;
-			} else {
-				dialogWasOpened = false;
 			}
 		} else {
 			// Dialog is not opened
 			this.waitForBackdropAndClick(user, "#" + videoId + " ~ .bottom-div .video-track-info");
-			dialogWasOpened = true;
 		}
-		if (dialogWasOpened) {
-			try {
-				Thread.sleep(300);
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
+		try {
+			Thread.sleep(300);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
 		}
 	}
 

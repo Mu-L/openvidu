@@ -1,0 +1,8 @@
+{
+  "name": "node-publisher",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@livekit/rtc-node": "0.13.34"
+  }
+}

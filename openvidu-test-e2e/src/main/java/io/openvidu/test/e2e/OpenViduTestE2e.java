@@ -10,6 +10,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collection;
@@ -31,13 +32,18 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.containers.wait.strategy.WaitStrategy;
 import org.testcontainers.utility.DockerImageName;
 
+import io.livekit.server.AccessToken;
+import io.livekit.server.CanPublish;
 import io.livekit.server.IngressServiceClient;
+import io.livekit.server.RoomJoin;
+import io.livekit.server.RoomName;
 import io.livekit.server.RoomServiceClient;
 import io.openvidu.test.browsers.BrowserUser;
 import io.openvidu.test.browsers.ChromeUser;
@@ -360,6 +366,151 @@ public class OpenViduTestE2e {
 		String srtServerIp = srtServerContainer.getContainerInfo().getNetworkSettings().getIpAddress();
 
 		return "srt://" + srtServerIp + ":" + RTSP_SRT_PORT;
+	}
+
+	/**
+	 * Starts a LiveKit server RTC SDK participant (a minimal program at
+	 * src/test/resources/&lt;sdk&gt;-publisher) in a plain runtime container
+	 * that joins the given room and publishes a single video track with the
+	 * given codec (vp8, h264, vp9 or av1) as one plain RTP encoding: without
+	 * simulcast for VP8/H264 and without SVC (scalabilityMode L1T1) for VP9/AV1.
+	 *
+	 * The container mounts the program read-only at /app, copies it to /work
+	 * and runs it there, with a per-SDK dependency cache mounted at /cache so
+	 * repeated runs skip downloads. Blocks until the participant has published
+	 * its track (its TRACK_PUBLISHED log line). The container is stopped
+	 * automatically on test dispose.
+	 */
+	public void startServerSdkPublisher(String sdk, String roomName, String codec) throws Exception {
+		startServerSdkPublisher(sdk, roomName, codec, false);
+	}
+
+	/**
+	 * Launches the minimal publisher program of the given LiveKit server RTC SDK
+	 * (src/test/resources/<sdk>-publisher) in a plain runtime container, joining
+	 * roomName and publishing one video track of the given codec. multiLayer=false
+	 * publishes one plain RTP encoding (no simulcast, no SVC); multiLayer=true
+	 * publishes two layers from the same 640x480 source: simulcast (480x360 +
+	 * 640x480, the SDKs' absolute presets) for VP8/H264 and SVC L2T2 (320x240 +
+	 * 640x480) for VP9/AV1 — except the Go SDK, which forwards pre-encoded
+	 * samples and publishes two simulcast files (320x240 + 640x480). Returns once
+	 * the program logs TRACK_PUBLISHED.
+	 */
+	public void startServerSdkPublisher(String sdk, String roomName, String codec, boolean multiLayer)
+			throws Exception {
+		final String image;
+		final String runCommand;
+		int startupTimeoutMinutes = 5;
+		Map<String, String> env = new HashMap<>();
+		switch (sdk) {
+		case "go":
+			image = "golang:1.26";
+			runCommand = "go run .";
+			env.put("GOMODCACHE", "/cache/gomod");
+			env.put("GOCACHE", "/cache/gobuild");
+			break;
+		case "node":
+			image = "node:22";
+			runCommand = "npm install --no-audit --no-fund --loglevel=error && node main.mjs";
+			env.put("npm_config_cache", "/cache/npm");
+			break;
+		case "python":
+			image = "python:3.12";
+			runCommand = "pip install -q -r requirements.txt && python main.py";
+			env.put("PIP_CACHE_DIR", "/cache/pip");
+			break;
+		case "rust":
+			image = "rust:1";
+			// webrtc-sys links a prebuilt libwebrtc that requires clang++ >= 21
+			// (apt.llvm.org); the first run then compiles the whole livekit
+			// crate graph
+			runCommand = "apt-get update -qq >/dev/null && apt-get install -y -qq lsb-release gnupg >/dev/null"
+					+ " && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 >/dev/null 2>&1"
+					+ " && cargo run --release --locked";
+			env.put("CARGO_HOME", "/cache/cargo");
+			env.put("CARGO_TARGET_DIR", "/cache/cargo-target");
+			env.put("CC", "clang-21");
+			env.put("CXX", "clang++-21");
+			startupTimeoutMinutes = 30;
+			break;
+		case "dotnet":
+			image = "mcr.microsoft.com/dotnet/sdk:8.0";
+			runCommand = "dotnet run -c Release";
+			env.put("NUGET_PACKAGES", "/cache/nuget");
+			env.put("DOTNET_CLI_TELEMETRY_OPTOUT", "1");
+			startupTimeoutMinutes = 10;
+			break;
+		default:
+			throw new IllegalArgumentException("Unknown server SDK publisher: " + sdk);
+		}
+		// Publishers receive a ready-made token: it keeps the programs shorter
+		// (no per-SDK token dependency) and works with any api secret length
+		AccessToken accessToken = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
+		accessToken.setIdentity(sdk + "-publisher");
+		accessToken.addGrants(new RoomJoin(true), new RoomName(roomName), new CanPublish(true));
+		env.put("LIVEKIT_URL", LIVEKIT_URL);
+		env.put("LIVEKIT_TOKEN", accessToken.toJwt());
+		env.put("VIDEO_CODEC", codec);
+		env.put("VIDEO_LAYERS", multiLayer ? "multi" : "single");
+
+		String programDir = Paths.get("src/test/resources/" + sdk + "-publisher").toAbsolutePath().toString();
+		Path cacheDir = Paths.get(System.getProperty("java.io.tmpdir"), "openvidu-e2e-sdk-cache", sdk);
+		Files.createDirectories(cacheDir);
+
+		GenericContainer<?> publisherContainer = new GenericContainer<>(DockerImageName.parse(image))
+				.withCreateContainerCmdModifier(
+						cmd -> cmd.withName(sdk + "-publisher-" + (int) (Math.random() * 100000)))
+				.withNetworkMode("host").withFileSystemBind(programDir, "/app", BindMode.READ_ONLY)
+				.withFileSystemBind(cacheDir.toString(), "/cache").withEnv(env)
+				.withCommand("sh", "-c", "mkdir -p /work && cp -r /app/. /work && cd /work && " + runCommand)
+				.withLogConsumer(
+						frame -> log.info("[{}-publisher] {}", sdk, frame.getUtf8String().stripTrailing()))
+				.waitingFor(Wait.forLogMessage("^.*TRACK_PUBLISHED.*$", 1)
+						.withStartupTimeout(Duration.ofMinutes(startupTimeoutMinutes)));
+
+		if ("go".equals(sdk)) {
+			// The Go SDK sends pre-encoded media: loop a real (decodable) 5s
+			// file generated with the host's ffmpeg (Annex-B for H264, IVF for
+			// VP8/VP9/AV1). The FFI-based SDKs (node, python, rust, dotnet)
+			// encode raw frames themselves.
+			final String encoder;
+			switch (codec) {
+			case "h264":
+				encoder = "-c:v libx264 -profile:v baseline -level 3.1 -x264-params keyint=30:scenecut=0 -f h264";
+				break;
+			case "vp8":
+				encoder = "-c:v libvpx -g 30 -f ivf";
+				break;
+			case "vp9":
+				encoder = "-c:v libvpx-vp9 -g 30 -f ivf";
+				break;
+			case "av1":
+				encoder = "-c:v libaom-av1 -usage realtime -cpu-used 8 -g 30 -f ivf";
+				break;
+			default:
+				throw new IllegalArgumentException("Unknown video codec: " + codec);
+			}
+			Path mediaDir = Files.createTempDirectory("go-publisher-media");
+			// One file per layer: the single encoding, or the three simulcast
+			// layers (must match the sizes declared by go-publisher/main.go)
+			Map<String, String> layerSizes = multiLayer
+					? Map.of("VIDEO_FILE_LOW", "320x240", "VIDEO_FILE_HIGH", "640x480")
+					: Map.of("VIDEO_FILE", "640x480");
+			for (Map.Entry<String, String> layer : layerSizes.entrySet()) {
+				Path videoFile = mediaDir
+						.resolve("test-video-" + layer.getValue() + "." + ("h264".equals(codec) ? "h264" : "ivf"));
+				commandLine.executeCommand("ffmpeg -y -f lavfi -i testsrc=size=" + layer.getValue()
+						+ ":rate=30 -t 5 -pix_fmt yuv420p " + encoder + " " + videoFile, 120);
+				if (!Files.exists(videoFile) || Files.size(videoFile) == 0) {
+					Assertions.fail("ffmpeg could not generate the " + codec + " test file " + videoFile);
+				}
+				publisherContainer.withEnv(layer.getKey(), "/media/" + videoFile.getFileName());
+			}
+			publisherContainer.withFileSystemBind(mediaDir.toString(), "/media", BindMode.READ_ONLY);
+		}
+
+		publisherContainer.start();
+		containers.add(publisherContainer);
 	}
 
 	private void waitUntilLog(GenericContainer<?> container, String regex, int secondsTimeout) {
