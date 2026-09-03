@@ -3523,6 +3523,9 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// effect: the spatial layer is instead derived from the rendered size of
 		// the subscriber's video element
 		int spatialLayers = Integer.parseInt(scalabilityMode.substring(1, 2));
+		if (!adaptiveStream && spatialLayers > 1) {
+			this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
+		}
 		int highWidth = this.getSubscriberVideoFrameWidth(user, subscriberVideo);
 		user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
 		Thread.sleep(300);
