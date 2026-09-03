@@ -106,6 +106,12 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 	private static final long WAIT_UNTIL_MAX_MILLIS = 20000;
 
+	// Minimum average frame rate that a subscriber video must sustain over a
+	// window of at least MIN_FRAMES_DECODED_WINDOW_MILLIS to be considered
+	// properly decoded and played
+	private static final long MIN_FRAMES_DECODED_FPS = 4;
+	private static final long MIN_FRAMES_DECODED_WINDOW_MILLIS = 2000;
+
 	@BeforeAll()
 	protected static void setupAll() throws Exception {
 		checkFfmpegInstallation();
@@ -4277,7 +4283,9 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 				.orElseThrow(() -> new AssertionError("No layers in " + trackInfo));
 	}
 
-	/** Width of the highest-quality published layer, from the server's TrackInfo. */
+	/**
+	 * Width of the highest-quality published layer, from the server's TrackInfo.
+	 */
 	private int highestLayerWidth(TrackInfo trackInfo) {
 		return trackInfo.getLayersList().stream().mapToInt(VideoLayer::getWidth).max()
 				.orElseThrow(() -> new AssertionError("No layers in " + trackInfo));
@@ -4956,18 +4964,34 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	}
 
 	// A subscriber video is only properly received AND played if its decoder keeps
-	// producing new frames. Receiving bytes is not enough: a subscriber may receive
-	// media that it is not able to decode at all
+	// producing new frames at a sustained rate. Receiving bytes is not enough: a
+	// subscriber may receive media that it is not able to decode at all. And a
+	// single new decoded frame is not enough either: a video that only decodes one
+	// or two frames over a timespan of several seconds is a frozen video, not a
+	// playing one, and must fail the test. So framesDecoded is required to grow at
+	// MIN_FRAMES_DECODED_FPS or more, averaged over a window of at least
+	// MIN_FRAMES_DECODED_WINDOW_MILLIS
 	private void waitUntilSubscriberFramesDecodedIncrease(OpenViduTestappUser user, WebElement videoElement) {
-		this.waitUntilSubscriberFramesDecodedIncrease(user, videoElement,
-				this.getSubscriberVideoFramesDecoded(user, videoElement));
-	}
-
-	private void waitUntilSubscriberFramesDecodedIncrease(OpenViduTestappUser user, WebElement videoElement,
-			final long previousFramesDecoded) {
+		final long initialFramesDecoded = this.getSubscriberVideoFramesDecoded(user, videoElement);
+		final long windowStart = System.currentTimeMillis();
+		// Last sample taken by the loop, only to report it if the wait times out
+		final java.util.concurrent.atomic.AtomicLong lastFramesDecoded = new java.util.concurrent.atomic.AtomicLong();
+		final java.util.concurrent.atomic.AtomicLong lastWindowMillis = new java.util.concurrent.atomic.AtomicLong();
 		this.waitUntilAux(user, videoElement, () -> {
-			return this.getSubscriberVideoFramesDecoded(user, videoElement) > previousFramesDecoded;
-		}, "Timeout waiting for subscriber track to increase its framesDecoded from " + previousFramesDecoded);
+			long framesDecoded = this.getSubscriberVideoFramesDecoded(user, videoElement) - initialFramesDecoded;
+			long windowMillis = System.currentTimeMillis() - windowStart;
+			lastFramesDecoded.set(framesDecoded);
+			lastWindowMillis.set(windowMillis);
+			// The window keeps growing while waiting, so a video that decodes a
+			// frame every now and then falls further behind the required rate
+			// instead of eventually satisfying it
+			return windowMillis >= MIN_FRAMES_DECODED_WINDOW_MILLIS
+					&& framesDecoded * 1000 >= MIN_FRAMES_DECODED_FPS * windowMillis;
+		}, () -> "Timeout waiting for subscriber track to decode video at a sustained frame rate: only "
+				+ lastFramesDecoded.get() + " frame(s) decoded in " + lastWindowMillis.get() + " ms ("
+				+ String.format("%.2f", lastFramesDecoded.get() * 1000d / Math.max(1, lastWindowMillis.get()))
+				+ " fps), while at least " + MIN_FRAMES_DECODED_FPS
+				+ " fps are required. Such a subscriber video is a frozen video");
 	}
 
 	private void waitUntilPublisherBytesSentIncrease(OpenViduTestappUser user, WebElement videoElement, String rid,
@@ -4994,6 +5018,13 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 	private void waitUntilAux(OpenViduTestappUser user, WebElement videoElement,
 			Callable<Boolean> breakFromLoopFunction, String errMsg) {
+		this.waitUntilAux(user, videoElement, breakFromLoopFunction, () -> errMsg);
+	}
+
+	// Same as above, but building the error message only if the wait times out, so
+	// that it can report the values actually observed by the last iteration
+	private void waitUntilAux(OpenViduTestappUser user, WebElement videoElement,
+			Callable<Boolean> breakFromLoopFunction, java.util.function.Supplier<String> errMsg) {
 		try {
 			final long intervalWait = 250;
 			final long deadline = System.currentTimeMillis() + WAIT_UNTIL_MAX_MILLIS;
@@ -5015,7 +5046,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 				}
 			}
 			if (!breakFromLoop) {
-				Assertions.fail(errMsg);
+				Assertions.fail(errMsg.get());
 			}
 		} finally {
 			// Best-effort close of the info dialog
