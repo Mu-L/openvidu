@@ -21,7 +21,13 @@ import { MatSelectModule } from '@angular/material/select';
   templateUrl: './video-track.component.html',
   styleUrl: './video-track.component.css',
   changeDetection: ChangeDetectionStrategy.Eager,
-  imports: [NgClass, MatIconModule, MatTooltipModule, MatFormFieldModule, MatSelectModule],
+  imports: [
+    NgClass,
+    MatIconModule,
+    MatTooltipModule,
+    MatFormFieldModule,
+    MatSelectModule,
+  ],
 })
 export class VideoTrackComponent extends TrackComponent {
   muteVideoIcon: string = 'videocam';
@@ -42,7 +48,8 @@ export class VideoTrackComponent extends TrackComponent {
   screenShareTrack: MediaStreamTrack | undefined;
 
   segmentationMethod: 'mediapipe' | 'chroma' = 'mediapipe';
-  modelAssetPath: string = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
+  modelAssetPath: string =
+    'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
   chromaKey = {
     autoDetect: true,
     autoDetectThreshold: [70, 70, 70] as [number, number, number],
@@ -50,14 +57,12 @@ export class VideoTrackComponent extends TrackComponent {
     saturationRange: [50, 255] as [number, number],
     valueRange: [50, 255] as [number, number],
     sampleRegion: { startX: 0.05, endX: 0.2, startY: 0.08, endY: 0.25 },
-    autoDetectFrameInterval: 30
+    autoDetectFrameInterval: 30,
   };
 
   private dialog = inject(MatDialog);
 
-  constructor(
-    protected override testFeedService: TestFeedService,
-  ) {
+  constructor(protected override testFeedService: TestFeedService) {
     super(testFeedService);
   }
 
@@ -87,7 +92,7 @@ export class VideoTrackComponent extends TrackComponent {
         videoQuality = VideoQuality.HIGH;
     }
     await (this.trackPublication as RemoteTrackPublication).setVideoQuality(
-      videoQuality
+      videoQuality,
     );
   }
 
@@ -101,18 +106,41 @@ export class VideoTrackComponent extends TrackComponent {
           // Store for matching with codecId in 'outbound-rtp' or 'inbound-rtp' reports
           codecs.set(report.id, report);
         }
-        if (report.type === 'outbound-rtp' || report.type === 'inbound-rtp') {
+        if (report.type === 'outbound-rtp') {
+          const reportTyped = report as RTCOutboundRtpStreamStats;
           videoLayers.push({
-            codecId: report.codecId,
-            scalabilityMode: report.scalabilityMode,
-            rid: report.rid,
-            active: report.active,
-            frameWidth: report.frameWidth,
-            frameHeight: report.frameHeight,
-            framesPerSecond: report.framesPerSecond,
-            framesDecoded: report.framesDecoded,
-            bytesReceived: report.bytesReceived,
-            bytesSent: report.bytesSent,
+            codecId: reportTyped.codecId,
+            scalabilityMode: reportTyped.scalabilityMode,
+            ssrc: reportTyped.ssrc,
+            rid: reportTyped.rid,
+            mid: reportTyped.mid,
+            active: reportTyped.active,
+            frameWidth: reportTyped.frameWidth,
+            frameHeight: reportTyped.frameHeight,
+            framesSent: reportTyped.framesSent,
+            framesEncoded: reportTyped.framesEncoded,
+            keyFramesEncoded: reportTyped.keyFramesEncoded,
+            bytesSent: reportTyped.bytesSent,
+            framesPerSecond: reportTyped.framesPerSecond,
+          });
+        }
+        if (report.type === 'inbound-rtp') {
+          const reportTyped = report as RTCInboundRtpStreamStats;
+          videoLayers.push({
+            codecId: reportTyped.codecId,
+            ssrc: reportTyped.ssrc,
+            mid: reportTyped.mid,
+            trackIdentifier: reportTyped.trackIdentifier,
+            frameWidth: reportTyped.frameWidth,
+            frameHeight: reportTyped.frameHeight,
+            framesReceived: reportTyped.framesReceived,
+            framesDecoded: reportTyped.framesDecoded,
+            keyFramesDecoded: reportTyped.keyFramesDecoded,
+            framesDropped: reportTyped.framesDropped,
+            bytesReceived: reportTyped.bytesReceived,
+            framesPerSecond: reportTyped.framesPerSecond,
+            freezeCount: reportTyped.freezeCount,
+            pauseCount: reportTyped.pauseCount,
           });
         }
       });
