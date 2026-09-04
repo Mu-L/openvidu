@@ -17,6 +17,8 @@
 
 package io.openvidu.test.e2e;
 
+import io.openvidu.test.e2e.annotations.OnlyMediasoup;
+
 import java.io.IOException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
@@ -3486,6 +3488,149 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		svcTest("AV1", "L3T3_KEY", true);
 	}
 
+	@Test
+	@DisplayName("SVC VP9 (L3T3) subscriber keeps playing when the publisher drops its top layer")
+	void svcVP9L3T3PublisherDropsTopLayerNoFreezeTest() throws Exception {
+		// TEST FOR ISSUE:
+		// https://github.com/OpenVidu/openvidu-pro-mediasoup#keep-the-temporal-layer-on-full-svc-spatial-downgrades
+		// COMMIT FIX:
+		// https://github.com/OpenVidu/openvidu-pro-mediasoup/commit/0f71434587c6a61d7d0dee9edefc638e58c2b7bc
+		//
+		// The RTP marker bit tells the subscriber where a picture ends: the publisher
+		// puts it on the last packet of the highest spatial layer it encodes. When the
+		// encoder stops producing its top layer (here: forced by re-capturing at a
+		// resolution too small to host three spatial layers), the marker moves down to
+		// a lower layer. An SFU that only marks the end of the layer it is *currently*
+		// forwarding, and clears the publisher's marker, leaves the subscriber without
+		// any end-of-picture marker until its layer bookkeeping catches up: a freeze of
+		// about 3 seconds. The subscriber must instead keep playing and simply follow
+		// the publisher down to the new top layer.
+		OpenViduTestappUser user = setupBrowserAndConnectToOpenViduTestapp("chrome");
+		this.addOnlyPublisherVideo(user, false, false, true, "L3T3");
+		this.forceCodec(user, 0, "VP9");
+		this.addSubscriber(user, false);
+		user.getDriver().findElements(By.className("connect-btn")).forEach(el -> el.sendKeys(Keys.ENTER));
+		user.getEventManager().waitUntilEventReaches("localTrackSubscribed", "ParticipantEvent", 1);
+		user.getEventManager().waitUntilEventReaches("trackSubscribed", "ParticipantEvent", 1);
+		user.getWaiter().until(ExpectedConditions.numberOfElementsToBe(By.tagName("video"), 2));
+
+		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
+		Assertions.assertEquals("video/VP9", this.getSubscriberVideoCodec(user, subscriberVideo));
+		// Subscriber on the top spatial layer and decoding
+		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
+		JsonObject before = this.getSubscriberVideoLayer(user, subscriberVideo);
+		long freezesBefore = this.getLayerCounter(before, "freezeCount");
+		long framesDecodedBefore = this.getLayerCounter(before, "framesDecoded");
+		Assertions.assertTrue(freezesBefore >= 0, "freezeCount stat should be available");
+		user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
+		Thread.sleep(300);
+
+		// Publisher re-captures at 640x360: an L3T3 encoder cannot host three spatial
+		// layers
+		// at that size, so it stops producing the top one
+		final long switchStart = System.currentTimeMillis();
+		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #restart-video-resolution")).click();
+		this.waitForBackdropAndClick(user, "mat-option.res-640x360");
+		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 640);
+		final long switchMillis = System.currentTimeMillis() - switchStart;
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
+		JsonObject after = this.getSubscriberVideoLayer(user, subscriberVideo);
+		long freezesAfter = this.getLayerCounter(after, "freezeCount");
+		long framesDecodedAfter = this.getLayerCounter(after, "framesDecoded");
+		user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
+		Thread.sleep(300);
+		log.info(
+				"[SVC] publisher dropped its top layer: subscriber reached 640 wide in {} ms, freezeCount {} -> {}, framesDecoded {} -> {}",
+				switchMillis, freezesBefore, freezesAfter, framesDecodedBefore, framesDecodedAfter);
+		Assertions.assertEquals(freezesBefore, freezesAfter,
+				"The subscriber's video froze while the publisher dropped its top spatial layer (freezeCount went from "
+						+ freezesBefore + " to " + freezesAfter + "; the new top layer was reached after "
+						+ switchMillis
+						+ " ms)");
+
+		// And it must be able to follow the publisher back up (this needs a keyframe)
+		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #restart-video-resolution")).click();
+		this.waitForBackdropAndClick(user, "mat-option.res-1920x1080");
+		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
+
+		gracefullyLeaveParticipants(user, 2);
+	}
+
+	@Test
+	@OnlyMediasoup // Pion seems to drop frames on its own
+	@DisplayName("SVC VP9 (L3T3) spatial downgrades do not drop frames")
+	void svcVP9L3T3SpatialDowngradeFramesDroppedTest() throws Exception {
+		// TEST FOR ISSUE:
+		// https://github.com/OpenVidu/openvidu-pro-mediasoup#keep-the-publishers-rtp-marker-bit-in-svc-consumers
+		// COMMIT FIX:
+		// https://github.com/OpenVidu/openvidu-pro-mediasoup/commit/3ee450958af481f9a7274a1758813689bd8559f2
+		//
+		// A spatial downgrade of a full-SVC stream must not trigger frame drops. The
+		// SFU keeps forwarding the lower layers, so the subscriber can decode the exact
+		// frame on which the switch happens. If the SFU truncates that frame (for
+		// example by dropping the last packet of the target layer), the subscriber
+		// discards it and the following ones until the next decodable frame, which
+		// Chrome reports as inbound-rtp "framesDropped". This is only a downgrade
+		// problem (upgrades wait for a keyframe and are always clean). The test repeats
+		// the downgrade cycle several times for better detection.
+		final int cycles = 10;
+		final long maxDroppedFramesOnDowngrades = 28;
+
+		OpenViduTestappUser user = setupBrowserAndConnectToOpenViduTestapp("chrome");
+		this.addOnlyPublisherVideo(user, false, false, true, "L3T3");
+		this.forceCodec(user, 0, "VP9");
+		this.addSubscriber(user, false);
+		user.getDriver().findElements(By.className("connect-btn")).forEach(el -> el.sendKeys(Keys.ENTER));
+		user.getEventManager().waitUntilEventReaches("localTrackSubscribed", "ParticipantEvent", 1);
+		user.getEventManager().waitUntilEventReaches("trackSubscribed", "ParticipantEvent", 1);
+		user.getWaiter().until(ExpectedConditions.numberOfElementsToBe(By.tagName("video"), 2));
+
+		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
+		Assertions.assertEquals("video/VP9", this.getSubscriberVideoCodec(user, subscriberVideo));
+		// Start from the top spatial layer (see svcTest for the ramp-up rationale)
+		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
+
+		long previousDropped = this.getLayerCounter(this.getSubscriberVideoLayer(user, subscriberVideo),
+				"framesDropped");
+		long droppedOnDowngrades = 0;
+		long droppedOnUpgrades = 0;
+		final String[] qualities = { "MEDIUM", "LOW", "HIGH" };
+		final int[] widths = { 960, 480, 1920 };
+		for (int cycle = 0; cycle < cycles; cycle++) {
+			for (int i = 0; i < qualities.length; i++) {
+				user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
+				Thread.sleep(300);
+				this.switchSubscriberSpatialLayer(user, subscriberVideo, false, qualities[i]);
+				this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, widths[i]);
+				// Give the decoder a moment to drain the pictures around the switch
+				Thread.sleep(500);
+				long dropped = this.getLayerCounter(this.getSubscriberVideoLayer(user, subscriberVideo),
+						"framesDropped");
+				long delta = dropped - previousDropped;
+				previousDropped = dropped;
+				boolean downgrade = !"HIGH".equals(qualities[i]);
+				if (downgrade) {
+					droppedOnDowngrades += delta;
+				} else {
+					droppedOnUpgrades += delta;
+				}
+				log.info("[SVC] cycle {} switch to {}: framesDropped +{} (total on downgrades: {}, on upgrades: {})",
+						cycle, qualities[i], delta, droppedOnDowngrades, droppedOnUpgrades);
+			}
+		}
+		user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
+
+		Assertions.assertTrue(droppedOnDowngrades <= maxDroppedFramesOnDowngrades,
+				"Spatial downgrades should not make the subscriber drop frames, but " + droppedOnDowngrades
+						+ " frames were dropped over " + (cycles * 2) + " downgrades (max allowed "
+						+ maxDroppedFramesOnDowngrades + "). Frames dropped on upgrades: " + droppedOnUpgrades);
+
+		gracefullyLeaveParticipants(user, 2);
+	}
+
 	private void svcTest(String codec, String scalabilityMode, boolean adaptiveStream) throws Exception {
 		final String codecUpperCase = codec.toUpperCase();
 		final long testStart = System.currentTimeMillis();
@@ -3944,6 +4089,108 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		ingressSimulcastTest(user, true, null, "H264_540P_25FPS_2_LAYERS");
 		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 video.remote"));
 		testTwoLayers(user, subscriberVideo);
+	}
+
+	@Test
+	@DisplayName("Ingress H264 Simulcast Firefox subscriber stats never reset")
+	void ingressH264SimulcastFirefoxStatsNeverResetTest() throws Exception {
+		// TEST FOR ISSUE:
+		// https://github.com/OpenVidu/openvidu-pro-mediasoup#send-bandwidth-probes-as-rtx-padding-of-a-video-consumer
+		// COMMIT FIX:
+		// https://github.com/OpenVidu/openvidu-pro-mediasoup/commit/72da65653c8a42bb3d68de6c24576bf53350d8ed
+		//
+		// Regression test: the SFU's bandwidth probes must not disturb the subscriber's
+		// receive stream. mediasoup used to send them with their own SSRC (1234) routed
+		// into the video m-section, and Firefox treated that unknown SSRC as a stream
+		// switch: it recreated its receive stream (every inbound-rtp counter restarted
+		// at 0) and froze the video until the next keyframe, on every probe burst. This
+		// test samples a Firefox subscriber for a while and its inbound-rtp report must
+		// keep the same SSRC and never decreasing counters, while the video keeps
+		// decoding.
+		final String browser = "firefox";
+		final long samplingMillis = 45000;
+		final long intervalMillis = 500;
+
+		OpenViduTestappUser user = setupBrowserAndConnectToOpenViduTestapp(browser);
+
+		log.info("Ingress H264 Simulcast {} subscriber stats never reset", browser);
+
+		// Only subscriber without adaptive stream, so that the highest layer is
+		// requested
+		this.addSubscriber(user, false);
+		user.getDriver().findElements(By.className("connect-btn")).forEach(el -> el.sendKeys(Keys.ENTER));
+		user.getEventManager().waitUntilEventReaches("connected", "RoomEvent", 1);
+
+		createIngress(user, "H264_540P_25FPS_2_LAYERS", null, true, "HTTP", null);
+
+		user.getEventManager().waitUntilEventReaches("trackSubscribed", "ParticipantEvent", 1);
+		user.getWaiter().until(ExpectedConditions.numberOfElementsToBe(By.tagName("video"), 1));
+
+		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 video.remote"));
+		waitUntilVideoLayersNotEmpty(user, subscriberVideo);
+		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
+
+		final StringBuilder anomalies = new StringBuilder();
+		long ssrc = -1;
+		long previousFramesDecoded = -1;
+		long previousFramesReceived = -1;
+		long previousBytesReceived = -1;
+		long firstFramesDecoded = -1;
+		long lastFramesDecoded = -1;
+		int samples = 0;
+		final long samplingStart = System.currentTimeMillis();
+		while (System.currentTimeMillis() - samplingStart < samplingMillis) {
+			JsonObject layer = this.getSubscriberVideoLayer(user, subscriberVideo);
+			long framesDecoded = this.getLayerCounter(layer, "framesDecoded");
+			long framesReceived = this.getLayerCounter(layer, "framesReceived");
+			long bytesReceived = this.getLayerCounter(layer, "bytesReceived");
+			long currentSsrc = this.getLayerCounter(layer, "ssrc");
+			log.info("[STATS] #{} ssrc={} framesDecoded={} framesReceived={} bytesReceived={}", samples, currentSsrc,
+					framesDecoded, framesReceived, bytesReceived);
+			if (framesDecoded < 0 || framesReceived < 0 || bytesReceived < 0 || currentSsrc < 0) {
+				anomalies.append(" | sample ").append(samples).append(": inbound-rtp report missing fields ")
+						.append(layer);
+			} else {
+				if (ssrc < 0) {
+					ssrc = currentSsrc;
+					firstFramesDecoded = framesDecoded;
+				} else if (currentSsrc != ssrc) {
+					anomalies.append(" | sample ").append(samples).append(": ssrc changed from ").append(ssrc)
+							.append(" to ").append(currentSsrc);
+				}
+				if (framesDecoded < previousFramesDecoded) {
+					anomalies.append(" | sample ").append(samples).append(": framesDecoded went from ")
+							.append(previousFramesDecoded).append(" to ").append(framesDecoded);
+				}
+				if (framesReceived < previousFramesReceived) {
+					anomalies.append(" | sample ").append(samples).append(": framesReceived went from ")
+							.append(previousFramesReceived).append(" to ").append(framesReceived);
+				}
+				if (bytesReceived < previousBytesReceived) {
+					anomalies.append(" | sample ").append(samples).append(": bytesReceived went from ")
+							.append(previousBytesReceived).append(" to ").append(bytesReceived);
+				}
+				previousFramesDecoded = framesDecoded;
+				previousFramesReceived = framesReceived;
+				previousBytesReceived = bytesReceived;
+				lastFramesDecoded = framesDecoded;
+			}
+			samples++;
+			Thread.sleep(intervalMillis);
+		}
+		final long elapsedMillis = System.currentTimeMillis() - samplingStart;
+		user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
+
+		Assertions.assertTrue(anomalies.length() == 0,
+				"The subscriber's inbound-rtp stats must keep the same SSRC and never decreasing counters (a reset means "
+						+ "the browser recreated its receive stream), but over " + samples + " samples: " + anomalies);
+		// The video must also have kept playing during the whole sampling window
+		final long decodedInWindow = lastFramesDecoded - firstFramesDecoded;
+		Assertions.assertTrue(decodedInWindow * 1000 >= MIN_FRAMES_DECODED_FPS * elapsedMillis,
+				"The subscriber should keep decoding at least " + MIN_FRAMES_DECODED_FPS + " fps, but only "
+						+ decodedInWindow + " frame(s) were decoded in " + elapsedMillis + " ms");
+
+		gracefullyLeaveParticipants(user, 1);
 	}
 
 	@Test
