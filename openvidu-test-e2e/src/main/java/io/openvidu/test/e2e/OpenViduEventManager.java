@@ -144,7 +144,9 @@ public class OpenViduEventManager {
 	public void stopPolling(boolean stopThread, boolean cleanExistingEvents) {
 		if (stopThread) {
 			this.isInterrupted.set(true);
-			this.pollingThread.interrupt();
+			if (this.pollingThread != null) {
+				this.pollingThread.interrupt();
+			}
 		}
 		if (cleanExistingEvents) {
 			this.eventCallbacks.clear();

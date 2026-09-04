@@ -28,6 +28,7 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 
 	private void connectToOpenViduTestApp(OpenViduTestappUser user) {
 		user.getDriver().get(APP_URL);
+		user.getWaiter().until(ExpectedConditions.presenceOfElementLocated(By.id("livekit-url")));
 		WebElement urlInput = user.getDriver().findElement(By.id("livekit-url"));
 		urlInput.clear();
 		urlInput.sendKeys(LIVEKIT_URL);
