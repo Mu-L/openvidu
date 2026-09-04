@@ -56,18 +56,31 @@ video {
 /* Keep the form-field visually compact (16×16 clipped box).
    The CDK overlay uses the Popover API (top layer) so it is
    immune to overflow:hidden and renders at its natural size. */
-#max-video-quality {
+#max-video-quality,
+#restart-video-resolution {
   width: 16px;
   height: 16px;
   overflow: hidden;
   font-size: 10px;
   font-weight: bold;
+  --mat-form-field-container-vertical-padding: 0px;
 }
 
-::ng-deep #max-video-quality .mdc-notched-outline * {
+/* The MDC outlined text field reserves 16px of horizontal padding
+   for the value, which alone exceeds this 16px-wide box and pushes
+   the value/arrow trigger (and therefore the dropdown svg) out of
+   the visible area. Removing it keeps the trigger inside the clip. */
+::ng-deep #max-video-quality .mat-mdc-text-field-wrapper,
+::ng-deep #restart-video-resolution .mat-mdc-text-field-wrapper {
+  padding: 0;
+}
+
+::ng-deep #max-video-quality .mdc-notched-outline *,
+::ng-deep #restart-video-resolution .mdc-notched-outline * {
   border-color: transparent !important;
 }
 
-::ng-deep #max-video-quality .mat-mdc-form-field-subscript-wrapper {
+::ng-deep #max-video-quality .mat-mdc-form-field-subscript-wrapper,
+::ng-deep #restart-video-resolution .mat-mdc-form-field-subscript-wrapper {
   display: none !important;
 }

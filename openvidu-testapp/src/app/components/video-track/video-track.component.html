@@ -7,20 +7,26 @@
         <mat-icon aria-label="Mute/Unmute video" class="mat-icon material-icons" role="img"
         aria-hidden="true">{{muteVideoIcon}}</mat-icon>
       </button>
-    }
-    @if (localParticipant) {
+
       <button (click)="unpublishTrack()" class="video-btn publish-unpublish-video" matTooltip="Unpublish track"
         matTooltipClass="custom-tooltip">
         <mat-icon aria-label="Unpublish track" class="mat-icon material-icons" role="img"
         aria-hidden="true">stop</mat-icon>
       </button>
-    }
-    @if (localParticipant) {
+
       <button (click)="openProcessorDialog()" class="video-btn toggle-track-processor" matTooltip="Open track processor settings"
         matTooltipClass="custom-tooltip">
         <mat-icon aria-label="Open track processor settings" class="mat-icon material-icons" role="img"
         aria-hidden="true">auto_fix_high</mat-icon>
       </button>
+
+      <mat-form-field id="restart-video-resolution" class="video-btn quality-option" matTooltip="Restart video at resolution" matTooltipClass="custom-tooltip">
+        <mat-select [(value)]="restartResolution" (selectionChange)="onRestartResolutionChange()">
+          @for (r of ['1920x1080', '1280x720', '640x360', '320x180']; track r) {
+            <mat-option [value]="r" [ngClass]="'res-' + r">{{r}}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
     }
     @if (!localParticipant) {
       <button (click)="toggleEnableTrack()" class="video-btn toggle-video-enabled" matTooltip="Toggle track enabled"
@@ -28,15 +34,13 @@
         <mat-icon aria-label="Toggle track enabled" class="mat-icon material-icons" role="img"
         aria-hidden="true">{{trackEnabled ? 'toggle_off' : 'toggle_on'}}</mat-icon>
       </button>
-    }
-    @if (!localParticipant) {
+
       <button (click)="toggleSubscribeTrack()" class="video-btn toggle-video-subscribed" matTooltip="Toggle track subscription"
         matTooltipClass="custom-tooltip">
         <mat-icon aria-label="Toggle track subscription" class="mat-icon material-icons" role="img"
         aria-hidden="true">{{trackSubscribed ? 'stop' : 'play_arrow'}}</mat-icon>
       </button>
-    }
-    @if (!localParticipant) {
+
       <mat-form-field id="max-video-quality" class="video-btn quality-option"  matTooltip="Set video quality" matTooltipClass="custom-tooltip">
         <mat-select [(value)]="maxVideoQuality" (selectionChange)="onQualityChange()">
           @for (q of ['LOW', 'MEDIUM', 'HIGH']; track q) {

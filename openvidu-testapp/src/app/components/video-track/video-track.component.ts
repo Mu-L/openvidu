@@ -2,6 +2,7 @@ import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
 import { NgClass } from '@angular/common';
 import {
   LocalTrack,
+  LocalVideoTrack,
   VideoTrack,
   RemoteTrackPublication,
   VideoQuality,
@@ -32,6 +33,8 @@ import { MatSelectModule } from '@angular/material/select';
 export class VideoTrackComponent extends TrackComponent {
   muteVideoIcon: string = 'videocam';
   maxVideoQuality: string;
+  // Resolution to re-capture the local video track at (see onRestartResolutionChange)
+  restartResolution: string;
 
   videoZoom = false;
 
@@ -94,6 +97,16 @@ export class VideoTrackComponent extends TrackComponent {
     await (this.trackPublication as RemoteTrackPublication).setVideoQuality(
       videoQuality,
     );
+  }
+
+  // Re-captures the local video track at the selected resolution. Useful to make
+  // the encoder change its layer structure on the fly: an SVC encoder drops its
+  // upper spatial layers when the capture is too small to host them
+  async onRestartResolutionChange() {
+    const [width, height] = this.restartResolution.split('x').map(Number);
+    await (this._track as LocalVideoTrack).restartTrack({
+      resolution: { width, height, frameRate: 30 },
+    });
   }
 
   openInfoDialog() {
