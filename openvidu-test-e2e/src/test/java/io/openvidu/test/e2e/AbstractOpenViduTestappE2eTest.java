@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions;
 import org.openqa.selenium.By;
 import org.openqa.selenium.Keys;
 import org.openqa.selenium.TakesScreenshot;
+import org.openqa.selenium.TimeoutException;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 
@@ -28,7 +29,18 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 
 	private void connectToOpenViduTestApp(OpenViduTestappUser user) {
 		user.getDriver().get(APP_URL);
-		user.getWaiter().until(ExpectedConditions.presenceOfElementLocated(By.id("livekit-url")));
+		try {
+			user.getWaiter().until(ExpectedConditions.presenceOfElementLocated(By.id("livekit-url")));
+		} catch (TimeoutException e) {
+			// Dump diagnostics and retry once with a reload before giving up
+			String screenshot = "data:image/png;base64,"
+					+ ((TakesScreenshot) user.getDriver()).getScreenshotAs(BASE64);
+			System.out.println("TIMEOUT WAITING FOR " + APP_URL + " TO LOAD, RETRYING ONCE. Page source:");
+			System.out.println(user.getDriver().getPageSource());
+			System.out.println(screenshot);
+			user.getDriver().get(APP_URL);
+			user.getWaiter().until(ExpectedConditions.presenceOfElementLocated(By.id("livekit-url")));
+		}
 		WebElement urlInput = user.getDriver().findElement(By.id("livekit-url"));
 		urlInput.clear();
 		urlInput.sendKeys(LIVEKIT_URL);
