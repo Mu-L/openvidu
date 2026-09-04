@@ -3576,7 +3576,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// problem (upgrades wait for a keyframe and are always clean). The test repeats
 		// the downgrade cycle several times for better detection.
 		final int cycles = 10;
-		final long maxDroppedFramesOnDowngrades = 28;
+		final long maxDroppedFramesOnDowngrades = 18;
 
 		OpenViduTestappUser user = setupBrowserAndConnectToOpenViduTestapp("chrome");
 		this.addOnlyPublisherVideo(user, false, false, true, "L3T3");
