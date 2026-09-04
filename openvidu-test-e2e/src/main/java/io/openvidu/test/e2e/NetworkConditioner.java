@@ -15,9 +15,16 @@ public class NetworkConditioner {
 	private static final Logger log = LoggerFactory.getLogger(NetworkConditioner.class);
 	private static final CommandLineExecutor commandLine = new CommandLineExecutor();
 
-	private static final String PUMBA_IMAGE = "gaiaadm/pumba";
-	private static final String NETTOOLS_IMAGE = "ghcr.io/alexei-led/pumba-alpine-nettools:latest";
+	private static final String PUMBA_IMAGE = "gaiaadm/pumba:1.2.1";
+	private static final String NETTOOLS_IMAGE = "ghcr.io/alexei-led/pumba-alpine-nettools:sha-19e0a46";
 	private static final String DOCKER_SOCK = "/var/run/docker.sock";
+
+	// Where Pumba installs the netem qdisc of a port-scoped netem impairment. Pumba
+	// 1.x owns the whole tree under the reserved root handle 504d: (prio, 3 bands)
+	// with netem on band 3, and verifies exactly this topology before removing it
+	// (pkg/tc/netem.go in the Pumba repo), so it is a stable contract of the pinned
+	// PUMBA_IMAGE version. Re-check it when bumping the pin (0.x used 1:3 / 30:).
+	private static final String PUMBA_NETEM_QDISC = "parent 504d:3 handle 5050:";
 
 	// Upper bound on expanded ports: Pumba creates one tc filter / iptables rule
 	// per port, so a huge range would be slow and fragile. The SFU RTC range (e.g.
@@ -67,25 +74,26 @@ public class NetworkConditioner {
 
 	/**
 	 * Update the OUTBOUND packet-loss percentage in place (no Pumba restart).
-	 * {@code tc qdisc change} rewrites only the netem loss parameter of the qdisc
-	 * Pumba installed for the port-scoped egress filter, preserving the queue and
-	 * the port filters. Requires a prior {@link #applyLossToOutboundPackets} with a
-	 * {@code durationSec} long enough to span the whole ramp.
+	 * {@code tc qdisc change} re-applies the netem parameters of the qdisc Pumba
+	 * installed for the port-scoped egress filter (loss at the new percentage, tc
+	 * defaults for everything else, which is all Pumba set), leaving the root prio
+	 * qdisc and its port filters untouched. Requires a prior
+	 * {@link #applyLossToOutboundPackets} with a {@code durationSec} long enough to
+	 * span the whole ramp: once Pumba's duration expires it removes the qdisc and
+	 * this fails.
 	 */
 	public static void updateOutboundLossPercent(String targetContainer, int lossPercent) {
 		log.info("Updating OUTBOUND packet loss on container {} to {}% in place (tc qdisc change, no Pumba restart)",
 				targetContainer, lossPercent);
-		// --entrypoint tc is REQUIRED: the nettools image's default entrypoint is `tail
-		// -f /dev/null`, so without overriding it the tc args would be handed to tail.
-		// The netem qdisc MUST be named by its handle (30:) — `tc qdisc change` looks
-		// it up by handle, so `parent 1:3` alone fails with "Failed to find specified
-		// qdisc". Pumba adds it as `parent 1:3 handle 30:` (root prio 1: -> netem on
-		// band 1:3), which we mirror here.
-		String cmd = "docker run --rm --network container:" + targetContainer
-				+ " --cap-add NET_ADMIN --entrypoint tc " + NETTOOLS_IMAGE
-				+ " qdisc change dev eth0 parent 1:3 handle 30: netem loss " + lossPercent + "% 2>&1";
-		String out = commandLine.executeCommand(cmd, 30);
-		log.info("tc qdisc change result: {}", out);
+		// Naming both parent and handle makes tc fail unless the tree is Pumba's. tc
+		// prints nothing on success, so any output means the change was rejected (e.g.
+		// "Failed to find specified qdisc" when no impairment is installed).
+		String out = nettools(targetContainer, "tc",
+				"qdisc change dev eth0 " + PUMBA_NETEM_QDISC + " netem loss " + lossPercent + "%");
+		if (!out.isBlank()) {
+			throw new IllegalStateException("tc qdisc change to " + lossPercent + "% loss failed on container "
+					+ targetContainer + ": " + out.trim());
+		}
 	}
 
 	/**
@@ -104,9 +112,7 @@ public class NetworkConditioner {
 				targetContainer, lossPercent);
 
 		// 1) Read the live INPUT rules (spec form) to find each port's DROP rule index
-		String listCmd = "docker run --rm --network container:" + targetContainer
-				+ " --cap-add NET_ADMIN --entrypoint iptables " + NETTOOLS_IMAGE + " -S INPUT 2>&1";
-		String[] rules = commandLine.executeCommand(listCmd, 30).split("-A INPUT");
+		String[] rules = nettools(targetContainer, "iptables", "-S INPUT").split("-A INPUT");
 
 		// 2) Build an atomic `iptables -R` per target port (rules[0] is the "-P INPUT
 		// ..." policy).
@@ -139,9 +145,7 @@ public class NetworkConditioner {
 		}
 
 		// 3) Apply all replacements in one sidecar
-		String replaceCmd = "docker run --rm --network container:" + targetContainer
-				+ " --cap-add NET_ADMIN --entrypoint sh " + NETTOOLS_IMAGE + " -c \"" + script + "\" 2>&1";
-		String out = commandLine.executeCommand(replaceCmd, 30);
+		String out = nettools(targetContainer, "sh", "-c \"" + script + "\"");
 		log.info("iptables -R result: {}", out);
 	}
 
@@ -221,20 +225,20 @@ public class NetworkConditioner {
 		final String iptablesRange = mediaPortRange.replace('-', ':'); // iptables ranges are low:high
 		log.info("Total OUTBOUND blackout (100% loss) on container {} across SFU media port range {} "
 				+ "(single iptables OUTPUT DROP)", targetContainer, mediaPortRange);
-		String cmd = "docker run --rm --network container:" + targetContainer
-				+ " --cap-add NET_ADMIN --entrypoint iptables " + NETTOOLS_IMAGE
-				+ " -A OUTPUT -o eth0 -p udp --dport " + iptablesRange + " -j DROP 2>&1";
-		String out = commandLine.executeCommand(cmd, 30);
+		String out = nettools(targetContainer, "iptables",
+				"-A OUTPUT -o eth0 -p udp --dport " + iptablesRange + " -j DROP");
 		log.info("blackout iptables -A OUTPUT result: {}", out);
 		blackoutContainer = targetContainer;
 	}
 
 	/**
-	 * Dump connectivity diagnostics for a bridged (netem) container towards the SFU, to debug why the
-	 * isolated browser can't establish (e.g. in CI). Everything is probed from INSIDE the container's
-	 * own network namespace (via the nettools sidecar), so it reflects exactly what the browser sees:
-	 * its own IPs/routes/DNS, DNS resolution of the LiveKit host, and TCP/ICMP reachability of the
-	 * signaling port. Best-effort: each probe tolerates missing tools / failures (logged inline).
+	 * Dump connectivity diagnostics for a bridged (netem) container towards the
+	 * SFU, to debug why the isolated browser can't establish (e.g. in CI).
+	 * Everything is probed from INSIDE the container's own network namespace (via
+	 * the nettools sidecar), so it reflects exactly what the browser sees: its own
+	 * IPs/routes/DNS, DNS resolution of the LiveKit host, and TCP/ICMP reachability
+	 * of the signaling port. Best-effort: each probe tolerates missing tools /
+	 * failures (logged inline).
 	 */
 	public static void logConnectivityDiagnostics(String netemContainer, String host, int signalingPort) {
 		log.info("===== NETEM CONNECTIVITY DIAGNOSTICS (container={}, target={}:{}) =====", netemContainer, host,
@@ -249,11 +253,9 @@ public class NetworkConditioner {
 				"nc -w4 -v " + host + " " + signalingPort + " </dev/null 2>&1",
 				"echo '--- HTTPS GET " + host + ":" + signalingPort + " (wget) ---'",
 				"wget -T6 -t1 --no-check-certificate -O /dev/null https://" + host + ":" + signalingPort + " 2>&1");
-		String cmd = "docker run --rm --network container:" + netemContainer + " --cap-add NET_ADMIN --entrypoint sh "
-				+ NETTOOLS_IMAGE + " -c \"" + script + "\" 2>&1";
 		String out;
 		try {
-			out = commandLine.executeCommand(cmd, 60);
+			out = nettools(netemContainer, "sh", "-c \"" + script + "\"", 60);
 		} catch (Exception e) {
 			out = "(diagnostics sidecar failed: " + e + ")";
 		}
@@ -291,9 +293,7 @@ public class NetworkConditioner {
 		if (blackoutContainer != null) {
 			log.info("Clearing OUTBOUND blackout (flushing iptables OUTPUT) on container {}", blackoutContainer);
 			// Flush the OUTPUT chain: the blackout DROP is the only rule we ever add there
-			String cmd = "docker run --rm --network container:" + blackoutContainer
-					+ " --cap-add NET_ADMIN --entrypoint iptables " + NETTOOLS_IMAGE + " -F OUTPUT 2>&1";
-			commandLine.executeCommand(cmd, 30);
+			nettools(blackoutContainer, "iptables", "-F OUTPUT");
 			blackoutContainer = null;
 		}
 	}
@@ -346,6 +346,23 @@ public class NetworkConditioner {
 			throw new IllegalArgumentException("Port out of range (0-65535): " + port);
 		}
 		return port;
+	}
+
+	/**
+	 * Run {@code entrypoint args} (tc, iptables, sh...) inside
+	 * {@code targetContainer}'s network namespace through the nettools sidecar
+	 * image, returning its combined stdout+stderr. --entrypoint is REQUIRED: the
+	 * image's default entrypoint is `tail -f /dev/null`, so without overriding it
+	 * the args would be handed to tail.
+	 */
+	private static String nettools(String targetContainer, String entrypoint, String args) {
+		return nettools(targetContainer, entrypoint, args, 30);
+	}
+
+	private static String nettools(String targetContainer, String entrypoint, String args, int timeoutSec) {
+		String cmd = "docker run --rm --network container:" + targetContainer + " --cap-add NET_ADMIN --entrypoint "
+				+ entrypoint + " " + NETTOOLS_IMAGE + " " + args + " 2>&1";
+		return commandLine.executeCommand(cmd, timeoutSec);
 	}
 
 	private static String pumbaRun() {
