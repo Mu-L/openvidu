@@ -4,6 +4,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
@@ -175,8 +176,7 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 
 	// Several stats of the same subscriber layer, taken from a single info dialog
 	// update. Sampling them one by one through getSubscriberVideoLayerStat would
-	// pay
-	// a full dialog read, and a stats refresh, for each one of them
+	// pay a full dialog read for each one of them
 	protected JsonObject getSubscriberVideoLayer(OpenViduTestappUser user, WebElement subscriberVideo) {
 		JsonArray layers = this.getLayersAsJsonArray(user, subscriberVideo);
 		return layers.isEmpty() ? new JsonObject() : layers.get(0).getAsJsonObject();
@@ -186,6 +186,21 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 	protected long getLayerCounter(JsonObject layer, String field) {
 		JsonElement element = layer.get(field);
 		return element == null || element.isJsonNull() ? -1 : element.getAsLong();
+	}
+
+	// getLayerCounter returns -1 for a stat that getStats() is not reporting yet.
+	// Absent is "unknown", not a value, so it must never satisfy a wait. Every
+	// waitUntilAux predicate below states that explicitly instead of relying on
+	// -1 happening to fail its own comparison: that holds for ==, > and >=, but
+	// NOT for != ("changes") predicates, where a bogus -1 differs from any real
+	// value and would otherwise look exactly like the change being waited for
+	protected boolean isStatPresent(long statValue) {
+		return statValue >= 0;
+	}
+
+	// Never report an absent stat back as a bogus -1 value
+	protected String describeStat(long statValue) {
+		return isStatPresent(statValue) ? String.valueOf(statValue) : "absent";
 	}
 
 	// If rid is null, retrieve the first layer
@@ -224,35 +239,62 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 	}
 
 	protected void waitUntilSubscriberFramesPerSecondNotZero(OpenViduTestappUser user, WebElement videoElement) {
+		// Kept across iterations only to tell "absent" from "present and 0" if the
+		// wait times out. Those two mean very different things here, and the
+		// original message ("waiting for framesPerSecond to exist") named neither
+		final AtomicLong lastFps = new AtomicLong(-1);
 		this.waitUntilAux(user, videoElement, () -> {
-			return this.getSubscriberVideoFramesPerSecond(user, videoElement) > 0;
-		}, "Timeout waiting for video track to have a framesPerSecond greater than 0");
+			// Chrome only starts reporting framesPerSecond once the decoder has
+			// produced frames for a whole second, so right after playback starts
+			// it is legitimately absent for a while: a "not yet", not a failure
+			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			long fps = this.getLayerCounter(layer, "framesPerSecond");
+			lastFps.set(fps);
+			return isStatPresent(fps) && fps > 0;
+		}, () -> {
+			long fps = lastFps.get();
+			return "Timeout waiting for video track to have a framesPerSecond greater than 0. Last value: "
+					+ describeStat(fps) + (isStatPresent(fps) ? ""
+							: ". Chrome omits framesPerSecond altogether when the decoder produced no frame"
+									+ " during the last second, so this subscriber video was frozen for the"
+									+ " whole wait, not merely slow to start");
+		});
 	}
 
 	protected void waitUntilSubscriberFramesPerSecondIs(OpenViduTestappUser user, WebElement videoElement, int fps) {
 		this.waitUntilAux(user, videoElement, () -> {
-			return this.getSubscriberVideoFramesPerSecond(user, videoElement) == fps;
+			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			long currentFps = this.getLayerCounter(layer, "framesPerSecond");
+			// An absent framesPerSecond is not the same as a reported 0: this wait
+			// only ever settles on a value getStats() actually reported
+			return isStatPresent(currentFps) && currentFps == fps;
 		}, "Timeout waiting for video track to have a framesPerSecond equal to " + fps);
 	}
 
 	protected void waitUntilSubscriberFrameWidthIs(OpenViduTestappUser user, WebElement videoElement,
 			final int expectedFrameWidth) {
 		this.waitUntilAux(user, videoElement, () -> {
-			return this.getSubscriberVideoFrameWidth(user, videoElement) == expectedFrameWidth;
+			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			long frameWidth = this.getLayerCounter(layer, "frameWidth");
+			return isStatPresent(frameWidth) && frameWidth == expectedFrameWidth;
 		}, "Timeout waiting for video track to have a frameWidth of " + expectedFrameWidth);
 	}
 
 	protected void waitUntilSubscriberFrameHeightIs(OpenViduTestappUser user, WebElement videoElement,
 			final int expectedFrameHeight) {
 		this.waitUntilAux(user, videoElement, () -> {
-			return this.getSubscriberVideoFrameHeight(user, videoElement) == expectedFrameHeight;
+			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			long frameHeight = this.getLayerCounter(layer, "frameHeight");
+			return isStatPresent(frameHeight) && frameHeight == expectedFrameHeight;
 		}, "Timeout waiting for video track to have a frameHeight of " + expectedFrameHeight);
 	}
 
 	protected void waitUntilSubscriberFrameWidthChanges(OpenViduTestappUser user, WebElement videoElement,
 			final int oldFrameWidth, final boolean shouldBeHigher) {
 		this.waitUntilAux(user, videoElement, () -> {
-			return this.getSubscriberVideoFrameWidth(user, videoElement) != oldFrameWidth;
+			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			long frameWidth = this.getLayerCounter(layer, "frameWidth");
+			return isStatPresent(frameWidth) && frameWidth != oldFrameWidth;
 		}, "Timeout waiting for video track to reach a " + (shouldBeHigher ? "higher" : "lower") + " resolution");
 		int newFrameWidth = this.getSubscriberVideoFrameWidth(user, videoElement);
 		if (shouldBeHigher) {
@@ -269,7 +311,9 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 	protected void waitUntilSubscriberBytesReceivedIncrease(OpenViduTestappUser user, WebElement videoElement,
 			final long previousBytesReceived) {
 		this.waitUntilAux(user, videoElement, () -> {
-			return this.getSubscriberVideoBytesReceived(user, videoElement) > previousBytesReceived;
+			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			long bytesReceived = this.getLayerCounter(layer, "bytesReceived");
+			return isStatPresent(bytesReceived) && bytesReceived > previousBytesReceived;
 		}, "Timeout waiting for subscriber track to increase its bytesReceived from " + previousBytesReceived);
 	}
 
@@ -382,7 +426,7 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 			while (!breakFromLoop && System.currentTimeMillis() < deadline) {
 				try {
 					breakFromLoop = breakFromLoopFunction.call();
-				} catch (Exception e1) {
+				} catch (Exception | AssertionError e1) {
 					e1.printStackTrace();
 				}
 				if (breakFromLoop) {
@@ -693,7 +737,13 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 		final java.util.concurrent.atomic.AtomicLong previous = new java.util.concurrent.atomic.AtomicLong(
 				this.getSubscriberVideoBytesReceived(user, videoElement));
 		this.waitUntilAux(user, videoElement, () -> {
-			long current = this.getSubscriberVideoBytesReceived(user, videoElement);
+			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			long current = this.getLayerCounter(layer, "bytesReceived");
+			if (!isStatPresent(current)) {
+				// Keep the previous sample as the baseline: overwriting it with an
+				// absent value would make the next comparison succeed against -1
+				return false;
+			}
 			return current > previous.getAndSet(current);
 		}, "Timeout waiting for the subscriber track bytesReceived to grow between consecutive samples");
 	}
