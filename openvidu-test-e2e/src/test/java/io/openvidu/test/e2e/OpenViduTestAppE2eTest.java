@@ -4746,59 +4746,65 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	void remoteVideoElementSurvivesParticipantChangesTest() throws Exception {
 		// openvidu-testapp test: it must keep the DOM elements of the remote tracks
 		// already rendered when the remote participant list changes
-		OpenViduTestappUser publisher = setupBrowserAndConnectToOpenViduTestapp("chrome");
-		OpenViduTestappUser subscriber = setupBrowserAndConnectToOpenViduTestapp("chrome");
-		OpenViduTestappUser newcomer = setupBrowserAndConnectToOpenViduTestapp("chrome");
+		OpenViduTestappUser user = setupBrowserAndConnectToOpenViduTestapp("chrome");
 
 		log.info("Remote video element survives participant changes");
 
-		this.addOnlyPublisherVideo(publisher, false, false, false);
-		this.joinRoomAs(publisher, "publisher");
-		publisher.getEventManager().waitUntilEventReaches("localTrackPublished", "RoomEvent", 1);
+		this.addOnlyPublisherVideo(user, false, false, false);
+		this.joinRoomAs(user, 0, "publisher");
+		user.getEventManager().waitUntilEventReaches(0, "localTrackPublished", "RoomEvent", 1);
 
-		this.addSubscriber(subscriber, false);
-		this.joinRoomAs(subscriber, "subscriber");
-		subscriber.getEventManager().waitUntilEventReaches("trackSubscribed", "RoomEvent", 1);
-		subscriber.getWaiter().until(ExpectedConditions.numberOfElementsToBe(By.tagName("video"), 1));
-		WebElement remoteVideo = subscriber.getDriver()
-				.findElement(By.cssSelector("#openvidu-instance-0 video.remote"));
-		this.waitUntilSubscriberFramesPerSecondNotZero(subscriber, remoteVideo);
+		this.addSubscriber(user, false);
+		this.joinRoomAs(user, 1, "subscriber");
+		user.getEventManager().waitUntilEventReaches(1, "trackSubscribed", "RoomEvent", 1);
+		final By subscriberVideos = By.cssSelector("#openvidu-instance-1 video");
+		user.getWaiter().until(ExpectedConditions.numberOfElementsToBe(subscriberVideos, 1));
+		WebElement remoteVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
+		this.waitUntilSubscriberFramesPerSecondNotZero(user, remoteVideo);
 
 		// A participant joins: the subscriber's remote participant list grows
-		this.addSubscriber(newcomer, false);
-		this.joinRoomAs(newcomer, "newcomer");
-		subscriber.getEventManager().waitUntilEventReaches("participantConnected", "RoomEvent", 1);
-		this.assertRemoteVideoElementKept(subscriber, remoteVideo, 1, "a participant joined");
+		this.addSubscriber(user, false);
+		this.joinRoomAs(user, 2, "newcomer");
+		user.getEventManager().waitUntilEventReaches(1, "participantConnected", "RoomEvent", 1);
+		this.assertRemoteVideoElementKept(user, remoteVideo, subscriberVideos, 1, "a participant joined");
 
 		// The publisher publishes a second video track: its publication list grows
-		publisher.getDriver().findElement(By.cssSelector("#openvidu-instance-0 .add-video-btn")).click();
-		publisher.getEventManager().waitUntilEventReaches("localTrackPublished", "RoomEvent", 2);
-		subscriber.getEventManager().waitUntilEventReaches("trackSubscribed", "RoomEvent", 2);
-		subscriber.getWaiter().until(ExpectedConditions.numberOfElementsToBe(By.tagName("video"), 2));
-		this.assertRemoteVideoElementKept(subscriber, remoteVideo, 2, "the publisher published a second track");
+		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 .add-video-btn")).click();
+		user.getEventManager().waitUntilEventReaches(0, "localTrackPublished", "RoomEvent", 2);
+		user.getEventManager().waitUntilEventReaches(1, "trackSubscribed", "RoomEvent", 2);
+		user.getWaiter().until(ExpectedConditions.numberOfElementsToBe(subscriberVideos, 2));
+		this.assertRemoteVideoElementKept(user, remoteVideo, subscriberVideos, 2,
+				"the publisher published a second track");
 
-		// A participant leaves: the subscriber's remote participant list shrinks
-		gracefullyLeaveParticipants(newcomer, 1);
-		subscriber.getEventManager().waitUntilEventReaches("participantDisconnected", "RoomEvent", 1);
-		this.assertRemoteVideoElementKept(subscriber, remoteVideo, 2, "a participant left");
+		// The participant leaves: the subscriber's remote participant list shrinks
+		this.leaveRoom(user, 2);
+		user.getEventManager().waitUntilEventReaches(1, "participantDisconnected", "RoomEvent", 1);
+		this.assertRemoteVideoElementKept(user, remoteVideo, subscriberVideos, 2, "a participant left");
 
 		// And the kept element is still a playing video
-		this.waitUntilSubscriberFramesPerSecondNotZero(subscriber, remoteVideo);
+		this.waitUntilSubscriberFramesPerSecondNotZero(user, remoteVideo);
 
-		gracefullyLeaveParticipants(subscriber, 1);
-		gracefullyLeaveParticipants(publisher, 1);
+		this.leaveRoom(user, 1);
+		this.leaveRoom(user, 0);
 	}
 
-	private void joinRoomAs(OpenViduTestappUser user, String identity) throws Exception {
-		WebElement participantNameInput = user.getDriver().findElement(By.id("participant-name-input-0"));
+	private void joinRoomAs(OpenViduTestappUser user, int instance, String identity) throws Exception {
+		WebElement participantNameInput = user.getDriver().findElement(By.id("participant-name-input-" + instance));
 		participantNameInput.clear();
 		participantNameInput.sendKeys(identity);
-		user.getDriver().findElements(By.className("connect-btn")).forEach(el -> el.sendKeys(Keys.ENTER));
-		user.getEventManager().waitUntilEventReaches("connected", "RoomEvent", 1);
+		user.getDriver().findElement(By.cssSelector("#openvidu-instance-" + instance + " .connect-btn"))
+				.sendKeys(Keys.ENTER);
+		user.getEventManager().waitUntilEventReaches(instance, "connected", "RoomEvent", 1);
 	}
 
-	private void assertRemoteVideoElementKept(OpenViduTestappUser user, WebElement remoteVideo, int expectedVideos,
-			String change) {
+	private void leaveRoom(OpenViduTestappUser user, int instance) throws Exception {
+		user.getDriver().findElement(By.cssSelector("#openvidu-instance-" + instance + " .disconnect-btn"))
+				.sendKeys(Keys.ENTER);
+		user.getEventManager().waitUntilEventReaches(instance, "disconnected", "RoomEvent", 1);
+	}
+
+	private void assertRemoteVideoElementKept(OpenViduTestappUser user, WebElement remoteVideo, By videos,
+			int expectedVideos, String change) {
 		try {
 			Assertions.assertTrue(remoteVideo.isDisplayed(),
 					"The remote video element is no longer displayed after " + change);
@@ -4806,7 +4812,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			Assertions.fail("The remote video element was re-created after " + change
 					+ ": the WebElement located before is stale", e);
 		}
-		Assertions.assertEquals(expectedVideos, user.getDriver().findElements(By.tagName("video")).size(),
+		Assertions.assertEquals(expectedVideos, user.getDriver().findElements(videos).size(),
 				"Wrong number of videos after " + change);
 	}
 
