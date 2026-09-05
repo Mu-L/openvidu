@@ -219,7 +219,7 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 			Thread.sleep(300);
 		}
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-" + quality);
+		this.waitAndClick(user, "mat-option.mode-" + quality);
 	}
 
 	/**

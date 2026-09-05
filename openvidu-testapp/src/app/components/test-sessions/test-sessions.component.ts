@@ -1,4 +1,3 @@
-import { animate, style, transition, trigger } from '@angular/animations';
 import { Component, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
@@ -22,14 +21,6 @@ export interface RoomConf {
     selector: 'app-test-sessions',
     templateUrl: './test-sessions.component.html',
     styleUrl: './test-sessions.component.css',
-    animations: [
-        trigger('fadeAnimation', [
-            transition(':enter', [
-                style({ opacity: 0 }),
-                animate('100ms', style({ opacity: 1 })),
-            ]),
-        ]),
-    ],
     changeDetection: ChangeDetectionStrategy.Eager,
     imports: [FormsModule, MatButtonModule, MatCheckboxModule, MatFormFieldModule, MatInputModule, OpenviduInstanceComponent],
 })

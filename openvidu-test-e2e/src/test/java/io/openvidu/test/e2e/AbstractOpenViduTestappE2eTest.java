@@ -446,7 +446,7 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 			// Best-effort close of the info dialog
 			try {
 				if (!user.getDriver().findElements(By.cssSelector("#close-dialog-btn")).isEmpty()) {
-					this.waitForBackdropAndClick(user, "#close-dialog-btn");
+					this.waitAndClick(user, "#close-dialog-btn");
 					Thread.sleep(500);
 				}
 			} catch (Exception e) {
@@ -463,15 +463,15 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 			// Dialog already opened
 			if (!user.getDriver().findElement(By.cssSelector("#subtitle")).getText().equals(videoId)) {
 				// Wrong dialog
-				this.waitForBackdropAndClick(user, "#close-dialog-btn");
-				this.waitForBackdropAndClick(user, "#" + videoId + " ~ .bottom-div .video-track-info");
+				this.waitAndClick(user, "#close-dialog-btn");
+				this.waitAndClick(user, "#" + videoId + " ~ .bottom-div .video-track-info");
 				dialogWasOpened = true;
 			} else {
 				dialogWasOpened = false;
 			}
 		} else {
 			// Dialog is not opened
-			this.waitForBackdropAndClick(user, "#" + videoId + " ~ .bottom-div .video-track-info");
+			this.waitAndClick(user, "#" + videoId + " ~ .bottom-div .video-track-info");
 			dialogWasOpened = true;
 		}
 		if (dialogWasOpened) {
@@ -531,7 +531,7 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 			user.getDriver().findElement(By.cssSelector("#openvidu-instance-" + numberOfUser + " .subscriber-checkbox"))
 					.click();
 		}
-		this.waitForBackdropAndClick(user, "#room-options-btn-" + numberOfUser);
+		this.waitAndClick(user, "#room-options-btn-" + numberOfUser);
 		Thread.sleep(300);
 		if (!hasAudio) {
 			user.getDriver().findElement(By.id("audio-capture-false")).click();
@@ -576,8 +576,8 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-" + numberOfUser + " .publisher-checkbox"))
 				.click();
 		if (!adaptiveStream) {
-			this.waitForBackdropAndClick(user, "#room-options-btn-" + numberOfUser);
-			this.waitForBackdropAndClick(user, "#room-adaptiveStream");
+			this.waitAndClick(user, "#room-options-btn-" + numberOfUser);
+			this.waitAndClick(user, "#room-adaptiveStream");
 			user.getDriver().findElement(By.id("close-dialog-btn")).click();
 			Thread.sleep(300);
 		}
@@ -587,45 +587,42 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 			String urlType,
 			String urlUri) throws InterruptedException {
 		if (!user.getDriver().findElements(By.id("close-dialog-btn")).isEmpty()) {
-			this.waitForBackdropAndClick(user, "#close-dialog-btn");
+			this.waitAndClick(user, "#close-dialog-btn");
 			Thread.sleep(300);
 		}
 		user.getDriver().findElement(By.xpath("//button[contains(@title,'Room API')]")).click();
 		if (preset != null) {
-			this.waitForBackdropAndClick(user, "#ingress-preset-select");
-			this.waitForBackdropAndClick(user, "#mat-option-" + preset.toUpperCase());
+			this.selectMatOption(user, "#ingress-preset-select", preset.toUpperCase());
 		} else {
 			if (!simulcast) {
-				this.waitForBackdropAndClick(user, "#ingress-simulcast");
+				this.waitAndClick(user, "#ingress-simulcast");
 				Thread.sleep(300);
 			}
-			this.waitForBackdropAndClick(user, "#ingress-video-codec-select");
-			this.waitForBackdropAndClick(user, "#mat-option-" + codec.toUpperCase());
+			this.selectMatOption(user, "#ingress-video-codec-select", codec.toUpperCase());
 		}
 		if (urlType != null) {
-			this.waitForBackdropAndClick(user, "#ingress-url-type-select");
-			this.waitForBackdropAndClick(user, "#mat-option-" + urlType.toUpperCase());
+			this.selectMatOption(user, "#ingress-url-type-select", urlType.toUpperCase());
 		}
 		if (urlUri != null) {
 			user.getDriver().findElement(By.cssSelector("#ingress-url-uri-field")).sendKeys(urlUri);
 			Thread.sleep(300);
 		}
-		this.waitForBackdropAndClick(user, "#create-ingress-api-btn");
-		this.waitForBackdropAndClick(user, "#close-dialog-btn");
+		this.waitAndClick(user, "#create-ingress-api-btn");
+		this.waitAndClick(user, "#close-dialog-btn");
 		Thread.sleep(300);
 	}
 
 	protected void setPublisherSimulcastLayersAndResolution(OpenViduTestappUser user, int numberOfUser,
 			String simulcastLayerName, Integer width, Integer height) throws InterruptedException {
-		this.waitForBackdropAndClick(user, "#room-options-btn-" + numberOfUser);
+		this.waitAndClick(user, "#room-options-btn-" + numberOfUser);
 		Thread.sleep(300);
 		this.setPublisherCustomVideoProperties(user, width, height, null);
 		user.getDriver().findElement(By.id("trackPublish-videoSimulcastLayers")).click();
-		this.waitForBackdropAndClick(user, "#mat-option-" + simulcastLayerName);
+		this.waitAndClick(user, "#mat-option-" + simulcastLayerName);
 		new org.openqa.selenium.interactions.Actions(user.getDriver())
 				.sendKeys(org.openqa.selenium.Keys.ESCAPE).perform();
 		Thread.sleep(300);
-		this.waitForBackdropAndClick(user, "#close-dialog-btn");
+		this.waitAndClick(user, "#close-dialog-btn");
 		Thread.sleep(300);
 	}
 
@@ -644,19 +641,57 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 		}
 		if (scalabilityMode != null) {
 			user.getDriver().findElement(By.id("trackPublish-scalabilityMode")).click();
-			this.waitForBackdropAndClick(user, ".mode-" + scalabilityMode);
+			this.waitAndClick(user, ".mode-" + scalabilityMode);
 		}
 	}
 
 	/**
-	 * Waits for any Material Design backdrop overlays to disappear and then clicks
-	 * the element. This prevents ElementClickInterceptedException caused by overlay
-	 * backdrops.
+	 * Selects the option of a mat-select whose option ids follow the testapp
+	 * convention "mat-option-{TEXT}" and whose options display that same text.
 	 */
-	protected void waitForBackdropAndClick(OpenViduTestappUser user, String cssSelector) {
+	protected void selectMatOption(OpenViduTestappUser user, String formFieldCssSelector, String optionText)
+			throws InterruptedException {
+		final By select = By.cssSelector(formFieldCssSelector + " mat-select");
+		final int maxAttempts = 5;
+		for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+			this.waitAndClick(user, formFieldCssSelector);
+			this.waitAndClick(user, "#mat-option-" + optionText);
+			try {
+				// A dedicated short wait: the user's shared WebDriverWait must keep its
+				// timeout (withTimeout would change it for every later wait)
+				new org.openqa.selenium.support.ui.WebDriverWait(user.getDriver(), java.time.Duration.ofSeconds(2))
+						.until(d -> optionText.equals(d.findElement(select).getText().trim()));
+				return;
+			} catch (org.openqa.selenium.TimeoutException e) {
+				log.warn("Selecting option '{}' of {} did not take effect (the select shows '{}'), attempt {}/{}",
+						optionText, formFieldCssSelector, user.getDriver().findElement(select).getText().trim(),
+						attempt, maxAttempts);
+				// A panel left open by a click that only opened it must be closed
+				// before retrying
+				if (!user.getDriver().findElements(By.cssSelector(".cdk-overlay-backdrop")).isEmpty()) {
+					new org.openqa.selenium.interactions.Actions(user.getDriver())
+							.sendKeys(org.openqa.selenium.Keys.ESCAPE).perform();
+					Thread.sleep(300);
+				}
+			}
+		}
+		Assertions.fail("Could not select option '" + optionText + "' of " + formFieldCssSelector + " after "
+				+ maxAttempts + " attempts");
+	}
+
+	/**
+	 * Waits until the element matching the CSS selector is present, displayed and
+	 * enabled, then clicks it, retrying every 250 ms for up to 10 seconds on the
+	 * transient failures of a UI that renders asynchronously.
+	 * 
+	 * It cannot tell a click that landed on the wrong element from a successful
+	 * one: for mat-select options use {@link #selectMatOption}, which verifies the
+	 * selection.
+	 */
+	protected void waitAndClick(OpenViduTestappUser user, String cssSelector) {
 		final long startTime = System.currentTimeMillis();
 		final long timeoutMillis = 10000; // 10 seconds total timeout
-		final long retryIntervalMillis = 500; // 500ms between retries
+		final long retryIntervalMillis = 250; // between retries
 
 		WebElement element = null;
 
@@ -688,7 +723,7 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 				System.out.println("INTERRUPTED EXCEPTION WHILE WAITING FOR ELEMENT TO BE CLICKABLE: " + cssSelector);
 				System.out.println(screenshot);
 				Thread.currentThread().interrupt();
-				throw new RuntimeException("Thread interrupted while waiting for backdrop to clear", e);
+				throw new RuntimeException("Thread interrupted while waiting for the element to be clickable", e);
 			}
 		}
 
@@ -698,7 +733,7 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 
 		// If we get here, we've timed out
 		throw new RuntimeException("Timeout waiting for element '" + cssSelector
-				+ "' to be clickable without backdrop interference after " + timeoutMillis + "ms");
+				+ "' to be present, displayed and enabled after " + timeoutMillis + "ms");
 	}
 
 	protected boolean assertAllElementsHaveTracks(OpenViduTestappUser user, String selector, boolean hasAudio,

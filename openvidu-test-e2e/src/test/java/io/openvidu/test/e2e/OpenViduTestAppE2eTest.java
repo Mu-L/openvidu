@@ -1443,7 +1443,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// Participant 1: Audio only, DTX disabled
 		this.addPublisherSubscriber(user, true, false);
 		int lastIndex = user.getDriver().findElements(By.cssSelector("app-openvidu-instance")).size() - 1;
-		this.waitForBackdropAndClick(user, "#room-options-btn-" + lastIndex);
+		this.waitAndClick(user, "#room-options-btn-" + lastIndex);
 		Thread.sleep(300);
 		user.getDriver().findElement(By.id("trackPublish-dtx")).click();
 		user.getDriver().findElement(By.id("close-dialog-btn")).click();
@@ -1534,7 +1534,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// Participant 1: Audio only, DTX disabled
 		this.addPublisherSubscriber(user, true, false);
 		int lastIndex = user.getDriver().findElements(By.cssSelector("app-openvidu-instance")).size() - 1;
-		this.waitForBackdropAndClick(user, "#room-options-btn-" + lastIndex);
+		this.waitAndClick(user, "#room-options-btn-" + lastIndex);
 		Thread.sleep(300);
 		user.getDriver().findElement(By.id("trackPublish-dtx")).click();
 		user.getDriver().findElement(By.id("close-dialog-btn")).click();
@@ -2069,12 +2069,12 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 	private void forceCodec(OpenViduTestappUser user, int numberOfUser, String codec) throws InterruptedException {
 		String codecLowerCase = codec.toLowerCase();
-		this.waitForBackdropAndClick(user, "#room-options-btn-" + numberOfUser);
+		this.waitAndClick(user, "#room-options-btn-" + numberOfUser);
 		Thread.sleep(300);
 		user.getDriver().findElement(By.id("trackPublish-backupCodec")).click();
 		user.getDriver().findElement(By.id("trackPublish-videoCodec")).click();
-		this.waitForBackdropAndClick(user, "#mat-option-" + codecLowerCase);
-		this.waitForBackdropAndClick(user, "#close-dialog-btn");
+		this.waitAndClick(user, "#mat-option-" + codecLowerCase);
+		this.waitAndClick(user, "#close-dialog-btn");
 		Thread.sleep(300);
 	}
 
@@ -2527,11 +2527,11 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// Manually change video quality of first subscriber to q
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
+		this.waitAndClick(user, "mat-option.mode-LOW");
 
 		// Manually change video quality of second subscriber to f
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-2 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-HIGH");
+		this.waitAndClick(user, "mat-option.mode-HIGH");
 
 		subscriberVideo1 = user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 video.remote"));
 		WebElement subscriberVideo2 = user.getDriver().findElement(By.cssSelector("#openvidu-instance-2 video.remote"));
@@ -2559,7 +2559,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// Manually change video quality of second subscriber to h
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-2 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-MEDIUM");
+		this.waitAndClick(user, "mat-option.mode-MEDIUM");
 
 		this.waitUntilPublisherLayerActive(user, publisherVideo, "q", true);
 		this.waitUntilPublisherLayerActive(user, publisherVideo, "h", true);
@@ -2723,17 +2723,17 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// Manually change video quality of subscriber to h
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-MEDIUM");
+		this.waitAndClick(user, "mat-option.mode-MEDIUM");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, h);
 
 		// Manually change video quality of subscriber to q
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
+		this.waitAndClick(user, "mat-option.mode-LOW");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, q);
 
 		// Manually change video quality of subscriber to f
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-HIGH");
+		this.waitAndClick(user, "mat-option.mode-HIGH");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, f);
 
 		gracefullyLeaveParticipants(user, 2);
@@ -3313,7 +3313,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// Even after forcing the low quality layer in the subscriber, with dynacast
 		// enabled, the entire SVC stream should remain active in publisher
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
+		this.waitAndClick(user, "mat-option.mode-LOW");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 960);
 		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
@@ -3532,7 +3532,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// at that size, so it stops producing the top one
 		final long switchStart = System.currentTimeMillis();
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #restart-video-resolution")).click();
-		this.waitForBackdropAndClick(user, "mat-option.res-640x360");
+		this.waitAndClick(user, "mat-option.res-640x360");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 640);
 		final long switchMillis = System.currentTimeMillis() - switchStart;
 		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
@@ -3552,7 +3552,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 
 		// And it must be able to follow the publisher back up (this needs a keyframe)
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #restart-video-resolution")).click();
-		this.waitForBackdropAndClick(user, "mat-option.res-1920x1080");
+		this.waitAndClick(user, "mat-option.res-1920x1080");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
 		this.waitUntilSubscriberFramesDecodedIncrease(user, subscriberVideo);
 
@@ -3804,7 +3804,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			}
 		} else {
 			user.getDriver().findElement(By.cssSelector("#openvidu-instance-1 #max-video-quality")).click();
-			this.waitForBackdropAndClick(user, "mat-option.mode-" + quality);
+			this.waitAndClick(user, "mat-option.mode-" + quality);
 		}
 	}
 
@@ -4705,13 +4705,13 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// Check manual simulcast changes
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
+		this.waitAndClick(user, "mat-option.mode-LOW");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 640);
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-MEDIUM");
+		this.waitAndClick(user, "mat-option.mode-MEDIUM");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1280);
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-HIGH");
+		this.waitAndClick(user, "mat-option.mode-HIGH");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
 	}
 
@@ -4719,23 +4719,23 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		// Check manual simulcast changes
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 960);
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
+		this.waitAndClick(user, "mat-option.mode-LOW");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 480);
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-MEDIUM");
+		this.waitAndClick(user, "mat-option.mode-MEDIUM");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 960);
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
+		this.waitAndClick(user, "mat-option.mode-LOW");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 480);
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-HIGH");
+		this.waitAndClick(user, "mat-option.mode-HIGH");
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 960);
 	}
 
 	private void testNoSimulcast(OpenViduTestappUser user, WebElement subscriberVideo) throws InterruptedException {
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
 		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitForBackdropAndClick(user, "mat-option.mode-LOW");
+		this.waitAndClick(user, "mat-option.mode-LOW");
 		// Without simulcast video should remain in high quality
 		Thread.sleep(4000);
 		this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, 1920);
