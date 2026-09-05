@@ -404,18 +404,18 @@ public class OpenViduTestE2e {
 		Map<String, String> env = new HashMap<>();
 		switch (sdk) {
 		case "go":
-			image = "golang:1.26";
+			image = "golang:1.27";
 			runCommand = "go run .";
 			env.put("GOMODCACHE", "/cache/gomod");
 			env.put("GOCACHE", "/cache/gobuild");
 			break;
 		case "node":
-			image = "node:22";
+			image = "node:24";
 			runCommand = "npm install --no-audit --no-fund --loglevel=error && node main.mjs";
 			env.put("npm_config_cache", "/cache/npm");
 			break;
 		case "python":
-			image = "python:3.12";
+			image = "python:3.14";
 			runCommand = "pip install -q -r requirements.txt && python main.py";
 			env.put("PIP_CACHE_DIR", "/cache/pip");
 			break;
@@ -434,7 +434,7 @@ public class OpenViduTestE2e {
 			startupTimeoutMinutes = 30;
 			break;
 		case "dotnet":
-			image = "mcr.microsoft.com/dotnet/sdk:8.0";
+			image = "mcr.microsoft.com/dotnet/sdk:10.0";
 			runCommand = "dotnet run -c Release";
 			env.put("NUGET_PACKAGES", "/cache/nuget");
 			env.put("DOTNET_CLI_TELEMETRY_OPTOUT", "1");
