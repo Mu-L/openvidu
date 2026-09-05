@@ -17,6 +17,27 @@ openvidu
 
 Visit [openvidu.io](https://openvidu.io)
 
+## What is OpenVidu?
+
+OpenVidu is a platform for building real-time video conferencing applications.
+It's built on top of [LiveKit](https://livekit.io) and [mediasoup](https://mediasoup.org),
+and is developed by a team with over a decade of experience building WebRTC systems.
+
+- **Self-hosted**: deploy it on your own infrastructure (AWS, GCP, Azure, Oracle,
+  DigitalOcean, on-premises) or use it as a managed service.
+- **API-compatible with LiveKit**: use any LiveKit client/server SDK unchanged.
+- **[OpenVidu Meet](https://github.com/OpenVidu/openvidu-meet)**: a fully-featured
+  video conferencing app that ships on top of this platform, ready to use or embed.
+- Advanced media features: recording, RTMP/streaming egress, AI agents (transcription,
+  translation), virtual backgrounds, and more.
+
+## Getting started
+
+- 📖 [Documentation](https://openvidu.io/latest/docs/)
+- 🚀 [Try it locally](https://github.com/OpenVidu/openvidu-local-deployment)
+- 💻 [Tutorials](https://github.com/OpenVidu/openvidu-tutorials)
+- 🎥 [OpenVidu Meet](https://github.com/OpenVidu/openvidu-meet) — the reference app
+
 ## Community Forum
 
 Visit [OpenVidu Community Forum](https://openvidu.discourse.group/)
