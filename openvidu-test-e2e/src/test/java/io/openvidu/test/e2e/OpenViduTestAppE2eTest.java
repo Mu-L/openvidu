@@ -1207,7 +1207,8 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 						ConnectionQuality.EXCELLENT, 45, "Expected connection quality to settle at EXCELLENT"));
 
 		String container = getNetemContainerName(punchbagUser);
-		final int HOLD_SECONDS = 8;
+		final int STEP_PCT = 10;
+		final int HOLD_SECONDS = 16;
 
 		// Ramp the PUBLISHER's uplink loss and record, at each step, the settled
 		// quality of both the impaired publisher (PunchbagUser) and the untouched
@@ -1215,7 +1216,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		Map<Integer, ConnectionQuality> publisherQuality = new LinkedHashMap<>();
 		Map<Integer, ConnectionQuality> subscriberQuality = new LinkedHashMap<>();
 		try {
-			for (int pct = 5; pct <= 95; pct += 5) {
+			for (int pct = STEP_PCT; pct <= 90; pct += STEP_PCT) {
 				log.info("Packet loss to " + pct + "%");
 				NetworkConditioner.updateOutboundLossPercent(container, pct);
 				Thread.sleep(HOLD_SECONDS * 1000L);
