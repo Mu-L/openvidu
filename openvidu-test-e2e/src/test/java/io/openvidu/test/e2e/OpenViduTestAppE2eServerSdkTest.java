@@ -1,5 +1,6 @@
 package io.openvidu.test.e2e;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -67,14 +68,36 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 	/**
 	 * {vp8, h264, vp9, av1} x {1, 2, 3} layers, single-layer cases first. System
 	 * properties sdk.codecs / sdk.layers (comma-separated) restrict the matrix,
-	 * e.g. -Dsdk.layers=2,3 -Dsdk.codecs=vp9,av1
+	 * e.g. -Dsdk.layers=2,3 -Dsdk.codecs=vp9,av1; unset means all. A blank
+	 * property or a selection matching no case fails here with the offending
+	 * values.
 	 */
 	static Stream<Arguments> serverSdkPublisherMatrix() {
-		List<String> layersFilter = List.of(System.getProperty("sdk.layers", "1,2,3").split(","));
-		List<String> codecsFilter = List.of(System.getProperty("sdk.codecs", "vp8,h264,vp9,av1").split(","));
-		return Stream.of(1, 2, 3).filter(layers -> layersFilter.contains(String.valueOf(layers)))
+		List<String> layersFilter = matrixFilter("sdk.layers", "1,2,3");
+		List<String> codecsFilter = matrixFilter("sdk.codecs", "vp8,h264,vp9,av1");
+		List<Arguments> matrix = Stream.of(1, 2, 3).filter(layers -> layersFilter.contains(String.valueOf(layers)))
 				.flatMap(layers -> Stream.of("vp8", "h264", "vp9", "av1").filter(codecsFilter::contains)
-						.map(codec -> Arguments.of(codec, layers)));
+						.map(codec -> Arguments.of(codec, layers)))
+				.toList();
+		if (matrix.isEmpty()) {
+			throw new IllegalArgumentException("System properties sdk.layers=" + layersFilter + " and sdk.codecs="
+					+ codecsFilter + " select no server SDK test case: sdk.layers takes values among 1, 2, 3 and "
+					+ "sdk.codecs among vp8, h264, vp9, av1 (comma-separated)");
+		}
+		return matrix.stream();
+	}
+
+	private static List<String> matrixFilter(String property, String defaultValue) {
+		String value = System.getProperty(property);
+		if (value == null) {
+			return List.of(defaultValue.split(","));
+		}
+		if (value.isBlank()) {
+			throw new IllegalArgumentException("System property " + property
+					+ " is blank and would select no server SDK test case: set it to comma-separated values ("
+					+ defaultValue + " for all) or leave it unset");
+		}
+		return Arrays.stream(value.split(",")).map(String::trim).toList();
 	}
 
 	@ParameterizedTest(name = "Go SDK {0} {1}-layer publisher to Chrome and Firefox early and late subscribers")
