@@ -154,11 +154,6 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 
 		log.info("{} SDK {} {}-layer publisher to Chrome and Firefox subscribers", sdk, codec, layers);
 
-		// Both browsers join the room as subscriber-only participants with
-		// adaptiveStream disabled (the received layer only changes through the
-		// testapp's max-video-quality selector), each with its own identity (a
-		// second join with the testapp's default identity would kick the first
-		// browser out of the room)
 		for (OpenViduTestappUser user : subscribers) {
 			this.addSubscriber(user, false);
 			WebElement participantNameInput = user.getDriver().findElement(By.id("participant-name-input-0"));
@@ -166,6 +161,9 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 			participantNameInput.sendKeys(browserName(user) + "-subscriber");
 			user.getDriver().findElements(By.className("connect-btn")).forEach(el -> el.sendKeys(Keys.ENTER));
 			user.getEventManager().waitUntilEventReaches("connected", "RoomEvent", 1);
+		}
+		for (OpenViduTestappUser user : subscribers) {
+			user.getEventManager().waitUntilEventReaches("active", "ParticipantEvent", 1);
 		}
 
 		this.startServerSdkPublisher(sdk, "TestRoom", codec, multiLayer);

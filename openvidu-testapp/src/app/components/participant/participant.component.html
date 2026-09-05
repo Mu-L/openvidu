@@ -102,7 +102,7 @@
         }
       </div>
       <div class="audio-tracks-container">
-        @for (trackPublication of participant.audioTrackPublications| keyvalue; track trackPublication) {
+        @for (trackPublication of participant.audioTrackPublications | keyvalue; track trackPublication.key) {
           <app-audio-track
             [index]="index" [trackPublication]="trackPublication.value" [track]="trackPublication.value.audioTrack"
           [localParticipant]="localParticipant"
@@ -110,7 +110,7 @@
           (newTrackEvent)="onTrackEvent($event)"></app-audio-track>
         }
       </div>
-      @for (trackPublication of participant.videoTrackPublications | keyvalue; track trackPublication) {
+      @for (trackPublication of participant.videoTrackPublications | keyvalue; track trackPublication.key) {
         <app-video-track
           [index]="index" [trackPublication]="trackPublication.value" [track]="trackPublication.value.videoTrack"
         [localParticipant]="localParticipant"

@@ -95,7 +95,7 @@
             [index]="index" [participantEvents]="participantEvents" [trackEvents]="trackEvents"
             [earlyParticipantEvents]="earlyParticipantEvents" [earlyParticipantListeners]="earlyParticipantListeners"
             [earlyTrackEvents]="earlyTrackEvents" [earlyTrackListeners]="earlyTrackListeners"></app-participant>
-            @for (participant of room.remoteParticipants | keyvalue; track participant) {
+            @for (participant of room.remoteParticipants | keyvalue; track participant.value.sid) {
               <app-participant class="remote-participant"
               [participant]="participant.value" [room]="room" [index]="index"
               [participantEvents]="participantEvents" [trackEvents]="trackEvents"
