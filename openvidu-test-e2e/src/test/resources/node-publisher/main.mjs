@@ -1,12 +1,5 @@
-// Minimal LiveKit Node RTC SDK publisher used by OpenViduTestAppE2eTest.
-// Joins the room of LIVEKIT_TOKEN and publishes a single video track with codec
-// VIDEO_CODEC (vp8, h264, vp9 or av1). VIDEO_LAYERS=single (default): one plain
-// RTP encoding (no simulcast for VP8/H264, no SVC = scalabilityMode L1T1 for
-// VP9/AV1). VIDEO_LAYERS=multi: two layers, simulcast for VP8/H264 (the SDK
-// derives 480x360 + 640x480 from the 640x480 source) and SVC L2T2 for
-// VP9/AV1. Pushes synthetic animated frames forever (the Java test stops the
-// container).
-// Env: LIVEKIT_URL, LIVEKIT_TOKEN, VIDEO_CODEC, VIDEO_LAYERS
+// Minimal LiveKit Node SDK publisher used by OpenViduTestAppE2eServerSdkTest
+// See ../README.md
 import {
   Room,
   LocalVideoTrack,
@@ -19,9 +12,9 @@ import {
 } from '@livekit/rtc-node';
 
 const codec = process.env.VIDEO_CODEC;
-const multiLayer = process.env.VIDEO_LAYERS === 'multi';
-const WIDTH = 640;
-const HEIGHT = 480;
+const layers = Number(process.env.VIDEO_LAYERS || '1');
+// The SDK only splits a simulcast source in three layers from 960 px wide
+const [WIDTH, HEIGHT] = layers === 3 ? [1280, 720] : [640, 480];
 
 const room = new Room();
 await room.connect(process.env.LIVEKIT_URL, process.env.LIVEKIT_TOKEN, {
@@ -36,9 +29,9 @@ const options = new TrackPublishOptions({
   source: TrackSource.SOURCE_CAMERA,
 });
 if (codec === 'vp8' || codec === 'h264') {
-  options.simulcast = multiLayer;
+  options.simulcast = layers > 1;
 } else {
-  options.scalabilityMode = multiLayer ? 'L2T2' : 'L1T1';
+  options.scalabilityMode = `L${layers}T${layers}`;
 }
 await room.localParticipant.publishTrack(track, options);
 
@@ -59,4 +52,4 @@ setInterval(() => {
     }
   }
   source.captureFrame(new VideoFrame(buf, WIDTH, HEIGHT, VideoBufferType.RGBA));
-}, multiLayer ? 66 : 33); // 15 fps in multi mode: several software encoders at 30 fps trigger libwebrtc CPU adaptation (layer sizes shrink)
+}, layers > 1 ? 66 : 33); // 15 fps with several layers: several software encoders at 30 fps trigger libwebrtc CPU adaptation (layer sizes shrink)

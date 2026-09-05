@@ -64,83 +64,87 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 		this.closeAllRooms(LK);
 	}
 
-	// Server RTC SDK publishers matrix: each SDK publishes each codec first as
-	// one plain RTP encoding (no simulcast for VP8/H264, no SVC for VP9/AV1)
-	// and then as two layers (high and low quality: simulcast for VP8/H264, SVC
-	// L2T2 for VP9/AV1), and a Chrome subscriber and a Firefox subscriber must
-	// both receive it — for two layers, switching to the LOW and then to the
-	// HIGH layer. The Go SDK single-layer H264 lane reproduces the mediasoup
-	// Producer codec-binding bug: Go SDK publishers declare no codec in their
-	// AddTrackRequest and prefer an H264 variant the server does not support,
-	// so the server's answer ends up VP8 first, the Producer is bound to VP8,
-	// the worker discards every incoming packet and the subscribers receive no
-	// media at all. See MEDIASOUP_CODEC_BINDING_BUG.md
-
 	/**
-	 * {vp8, h264, vp9, av1} x {single, multi} layers, single-layer cases first.
-	 * System properties sdk.codecs / sdk.layers (comma-separated) restrict the
-	 * matrix, e.g. -Dsdk.layers=multi -Dsdk.codecs=vp9,av1
+	 * {vp8, h264, vp9, av1} x {1, 2, 3} layers, single-layer cases first. System
+	 * properties sdk.codecs / sdk.layers (comma-separated) restrict the matrix,
+	 * e.g. -Dsdk.layers=2,3 -Dsdk.codecs=vp9,av1
 	 */
 	static Stream<Arguments> serverSdkPublisherMatrix() {
-		List<String> layersFilter = List.of(System.getProperty("sdk.layers", "single,multi").split(","));
+		List<String> layersFilter = List.of(System.getProperty("sdk.layers", "1,2,3").split(","));
 		List<String> codecsFilter = List.of(System.getProperty("sdk.codecs", "vp8,h264,vp9,av1").split(","));
-		return Stream.of("single", "multi").filter(layersFilter::contains)
+		return Stream.of(1, 2, 3).filter(layers -> layersFilter.contains(String.valueOf(layers)))
 				.flatMap(layers -> Stream.of("vp8", "h264", "vp9", "av1").filter(codecsFilter::contains)
 						.map(codec -> Arguments.of(codec, layers)));
 	}
 
-	@ParameterizedTest(name = "Go SDK {0} {1}-layer publisher to Chrome and Firefox subscribers")
+	@ParameterizedTest(name = "Go SDK {0} {1}-layer publisher to Chrome and Firefox early and late subscribers")
 	@MethodSource("serverSdkPublisherMatrix")
-	@DisplayName("Go SDK publisher to Chrome and Firefox subscribers")
-	void goSdkPublisherToBrowserSubscribersTest(String codec, String layers) throws Exception {
+	@DisplayName("Go SDK publisher to Chrome and Firefox early and late subscribers")
+	void goSdkPublisherToBrowserSubscribersTest(String codec, int layers) throws Exception {
 		serverSdkPublisherToBrowserSubscribersAux("go", codec, layers);
 	}
 
-	@ParameterizedTest(name = "Node SDK {0} {1}-layer publisher to Chrome and Firefox subscribers")
+	@ParameterizedTest(name = "Node SDK {0} {1}-layer publisher to Chrome and Firefox early and late subscribers")
 	@MethodSource("serverSdkPublisherMatrix")
-	@DisplayName("Node SDK publisher to Chrome and Firefox subscribers")
-	void nodeSdkPublisherToBrowserSubscribersTest(String codec, String layers) throws Exception {
+	@DisplayName("Node SDK publisher to Chrome and Firefox early and late subscribers")
+	void nodeSdkPublisherToBrowserSubscribersTest(String codec, int layers) throws Exception {
 		serverSdkPublisherToBrowserSubscribersAux("node", codec, layers);
 	}
 
-	@ParameterizedTest(name = "Python SDK {0} {1}-layer publisher to Chrome and Firefox subscribers")
+	@ParameterizedTest(name = "Python SDK {0} {1}-layer publisher to Chrome and Firefox early and late subscribers")
 	@MethodSource("serverSdkPublisherMatrix")
-	@DisplayName("Python SDK publisher to Chrome and Firefox subscribers")
-	void pythonSdkPublisherToBrowserSubscribersTest(String codec, String layers) throws Exception {
+	@DisplayName("Python SDK publisher to Chrome and Firefox early and late subscribers")
+	void pythonSdkPublisherToBrowserSubscribersTest(String codec, int layers) throws Exception {
 		serverSdkPublisherToBrowserSubscribersAux("python", codec, layers);
 	}
 
-	@ParameterizedTest(name = "Rust SDK {0} {1}-layer publisher to Chrome and Firefox subscribers")
+	@ParameterizedTest(name = "Rust SDK {0} {1}-layer publisher to Chrome and Firefox early and late subscribers")
 	@MethodSource("serverSdkPublisherMatrix")
-	@DisplayName("Rust SDK publisher to Chrome and Firefox subscribers")
-	void rustSdkPublisherToBrowserSubscribersTest(String codec, String layers) throws Exception {
+	@DisplayName("Rust SDK publisher to Chrome and Firefox early and late subscribers")
+	void rustSdkPublisherToBrowserSubscribersTest(String codec, int layers) throws Exception {
 		serverSdkPublisherToBrowserSubscribersAux("rust", codec, layers);
 	}
 
-	@ParameterizedTest(name = ".NET SDK {0} {1}-layer publisher to Chrome and Firefox subscribers")
+	@ParameterizedTest(name = ".NET SDK {0} {1}-layer publisher to Chrome and Firefox early and late subscribers")
 	@MethodSource("serverSdkPublisherMatrix")
-	@DisplayName(".NET SDK publisher to Chrome and Firefox subscribers")
-	void dotnetSdkPublisherToBrowserSubscribersTest(String codec, String layers) throws Exception {
+	@DisplayName(".NET SDK publisher to Chrome and Firefox early and late subscribers")
+	void dotnetSdkPublisherToBrowserSubscribersTest(String codec, int layers) throws Exception {
 		// Requires Livekit.Rtc.Dotnet >= 0.1.4 (TrackPublishOptions.VideoCodec)
 		serverSdkPublisherToBrowserSubscribersAux("dotnet", codec, layers);
 	}
 
 	/**
-	 * A Chrome browser and a Firefox browser join the room as subscriber-only
-	 * participants and a LiveKit server RTC SDK participant
-	 * (startServerSdkPublisher) joins the same room ("TestRoom" is the testapp
-	 * default) publishing a single video track with the given codec: as one plain
-	 * RTP encoding (layers "single") or as two layers (layers "multi": high and
-	 * low quality — simulcast for VP8/H264, SVC L2T2 for VP9/AV1). Both
-	 * subscribers must receive the track's media with that codec, going through
-	 * exactly the same steps; with two layers they also switch to the LOW and
-	 * then to the HIGH layer.
+	 * A subscriber-only participant of the room: the testapp instance (index
+	 * within its browser page) that hosts it, and its participant name.
 	 */
-	private void serverSdkPublisherToBrowserSubscribersAux(String sdk, String codec, String layers)
-			throws Exception {
+	private record Subscriber(OpenViduTestappUser user, int instance, String name) {
+		String instanceSelector() {
+			return "#openvidu-instance-" + instance;
+		}
+
+		WebElement remoteVideo() {
+			return user.getDriver().findElement(By.cssSelector(instanceSelector() + " video.remote"));
+		}
+	}
+
+	/**
+	 * A Chrome browser and a Firefox browser each connect one subscriber-only
+	 * participant to the room; then a LiveKit server RTC SDK participant joins it,
+	 * publishing a single video track with the given codec and number of layers:
+	 * one plain RTP encoding (1), or two or three layers (simulcast for VP8/H264,
+	 * SVC L2T2 / L3T3 for VP9/AV1). Both early subscribers, already subscribed when
+	 * the track appears, must receive it with that codec and those layers; with
+	 * several layers they switch to the LOW, (MEDIUM) and HIGH layers. Then each
+	 * browser adds a second subscriber-only participant as a late subscriber (the
+	 * publisher has been streaming for a while, so its first frame depends on the
+	 * SFU requesting a keyframe) that goes through the same media and layer checks
+	 * while the early subscribers keep the HIGH layer. The room ends up with 5
+	 * participants, and both join orders are covered in both browsers.
+	 */
+	private void serverSdkPublisherToBrowserSubscribersAux(String sdk, String codec, int layers) throws Exception {
 		final String expectedCodec = "video/" + codec.toUpperCase();
 		final String publisherIdentity = sdk + "-publisher";
-		final boolean multiLayer = "multi".equals(layers);
+		final boolean multiLayer = layers > 1;
 
 		// The Go SDK forwards pre-encoded samples (no encoder), so its only
 		// multi-layer shape is RID simulcast — and LiveKit does not support RID
@@ -149,40 +153,36 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 		Assumptions.assumeFalse(multiLayer && "go".equals(sdk) && ("vp9".equals(codec) || "av1".equals(codec)),
 				"The Go SDK cannot publish SVC, and VP9/AV1 RID simulcast is not a supported LiveKit publish shape");
 
-		List<OpenViduTestappUser> subscribers = List.of(setupBrowserAndConnectToOpenViduTestapp("chrome"),
-				setupBrowserAndConnectToOpenViduTestapp("firefox"));
+		log.info("{} SDK {} {}-layer publisher to Chrome and Firefox early and late subscribers", sdk, codec,
+				layers);
 
-		log.info("{} SDK {} {}-layer publisher to Chrome and Firefox subscribers", sdk, codec, layers);
+		OpenViduTestappUser chrome = setupBrowserAndConnectToOpenViduTestapp("chrome");
+		OpenViduTestappUser firefox = setupBrowserAndConnectToOpenViduTestapp("firefox");
 
-		for (OpenViduTestappUser user : subscribers) {
-			this.addSubscriber(user, false);
-			WebElement participantNameInput = user.getDriver().findElement(By.id("participant-name-input-0"));
-			participantNameInput.clear();
-			participantNameInput.sendKeys(browserName(user) + "-subscriber");
-			user.getDriver().findElements(By.className("connect-btn")).forEach(el -> el.sendKeys(Keys.ENTER));
-			user.getEventManager().waitUntilEventReaches("connected", "RoomEvent", 1);
-		}
-		for (OpenViduTestappUser user : subscribers) {
-			user.getEventManager().waitUntilEventReaches("active", "ParticipantEvent", 1);
-		}
+		// Early subscribers: in the room before the SDK publishes
+		List<Subscriber> earlySubscribers = List.of(joinAsSubscriberOnly(chrome, "early"),
+				joinAsSubscriberOnly(firefox, "early"));
 
-		this.startServerSdkPublisher(sdk, "TestRoom", codec, multiLayer);
+		this.startServerSdkPublisher(sdk, "TestRoom", codec, layers);
 
 		// The server's authoritative view of the publication (RoomService API):
 		// the LiveKit TrackInfo of a video publication lists one layer per
 		// simulcast layer or SVC spatial layer, so one plain encoding (no
-		// simulcast, no SVC / L1T1) has exactly one layer and a two-layer
-		// publish (simulcast or SVC L2T2) has two
+		// simulcast, no SVC / L1T1) has exactly one layer and a two- or
+		// three-layer publish (simulcast or SVC L2T2 / L3T3) has two or three
 		TrackInfo trackInfo = this.getPublishedVideoTrackInfo("TestRoom", publisherIdentity);
-		final int expectedLayers = multiLayer ? 2 : 1;
-		Assertions.assertEquals(expectedLayers, trackInfo.getLayersCount(), "Expected " + expectedLayers
+		Assertions.assertEquals(layers, trackInfo.getLayersCount(), "Expected " + layers
 				+ " video layer(s) in the track published by the " + sdk + " SDK, but the server reports "
 				+ trackInfo.getLayersList());
-		Assertions.assertEquals(expectedLayers, trackInfo.getCodecs(0).getLayersCount(), "Expected " + expectedLayers
-				+ " video layer(s) for codec " + expectedCodec + " published by the " + sdk + " SDK");
-		// VP8/H264 multi-layer publishes are simulcast and VP9/AV1 ones are SVC
-		// L2T2, except for the Go SDK: it forwards pre-encoded samples (no
-		// encoder, so no SVC) and publishes simulcast for every codec
+		Assertions.assertEquals(layers, trackInfo.getCodecs(0).getLayersCount(),
+				"Expected " + layers + " video layer(s) for codec " + expectedCodec + " published by the " + sdk
+						+ " SDK");
+		Assertions.assertEquals(layers, sortedLayerWidths(trackInfo).size(),
+				"Expected " + layers + " video layers of distinct widths published by the " + sdk + " SDK, but got "
+						+ trackInfo.getLayersList());
+		// VP8/H264 multi-layer publishes are simulcast and VP9/AV1 ones are SVC,
+		// except for the Go SDK: it forwards pre-encoded samples (no encoder, so
+		// no SVC) and publishes simulcast for every codec
 		final boolean expectSimulcast = multiLayer && ("vp8".equals(codec) || "h264".equals(codec) || "go".equals(sdk));
 		if (!multiLayer || expectSimulcast) {
 			Assertions.assertEquals(expectSimulcast, trackInfo.getSimulcast(),
@@ -194,14 +194,42 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 					"The track published by the " + sdk + " SDK should not be SVC");
 		}
 
-		// Both browsers must receive the track, with its codec and its layers
-		for (OpenViduTestappUser user : subscribers) {
-			assertSubscriberReceivesVideo(user, sdk, publisherIdentity, expectedCodec, trackInfo);
+		for (Subscriber subscriber : earlySubscribers) {
+			assertSubscriberReceivesVideo(subscriber, sdk, publisherIdentity, expectedCodec, trackInfo);
 		}
+		assertSubscribersSwitchLayers(earlySubscribers, trackInfo);
 
-		for (OpenViduTestappUser user : subscribers) {
-			gracefullyLeaveParticipants(user, 1);
+		// Late subscribers: the publisher has been streaming for a while
+		List<Subscriber> lateSubscribers = List.of(joinAsSubscriberOnly(chrome, "late"),
+				joinAsSubscriberOnly(firefox, "late"));
+		for (Subscriber subscriber : lateSubscribers) {
+			assertSubscriberReceivesVideo(subscriber, sdk, publisherIdentity, expectedCodec, trackInfo);
 		}
+		assertSubscribersSwitchLayers(lateSubscribers, trackInfo);
+
+		gracefullyLeaveParticipants(chrome, 2);
+		gracefullyLeaveParticipants(firefox, 2);
+	}
+
+	/**
+	 * Adds a testapp instance to the browser page and connects it to the default
+	 * room as a subscriber-only participant named "<Browser>-<role>-subscriber"
+	 * (e.g. "Chrome-early-subscriber"), with adaptiveStream disabled, and waits
+	 * until it is active.
+	 */
+	private Subscriber joinAsSubscriberOnly(OpenViduTestappUser user, String role) throws Exception {
+		// The new instance takes the next index
+		final int instance = user.getDriver().findElements(By.cssSelector("app-openvidu-instance")).size();
+		final String name = browserName(user) + "-" + role + "-subscriber";
+		this.addSubscriber(user, false);
+		WebElement participantNameInput = user.getDriver().findElement(By.id("participant-name-input-" + instance));
+		participantNameInput.clear();
+		participantNameInput.sendKeys(name);
+		user.getDriver().findElement(By.cssSelector("#openvidu-instance-" + instance + " .connect-btn"))
+				.sendKeys(Keys.ENTER);
+		user.getEventManager().waitUntilEventReaches(instance, "connected", "RoomEvent", 1);
+		user.getEventManager().waitUntilEventReaches(instance, "active", "ParticipantEvent", 1);
+		return new Subscriber(user, instance, name);
 	}
 
 	/** "Chrome", "Firefox"... from the BrowserUser class of the testapp user. */
@@ -211,38 +239,43 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 
 	/**
 	 * Selects the max video quality (LOW, MEDIUM or HIGH) of the remote track of
-	 * the first testapp instance, closing the track info dialog if it is open.
+	 * the subscriber's testapp instance, closing the track info dialog if it is
+	 * open. The selection is verified (selectMatOption): a click that only opened
+	 * or closed the mat-select panel is retried instead of leaving the panel open
+	 * over the page, which would block the later clicks on the video controls.
 	 */
-	private void selectSubscriberVideoQuality(OpenViduTestappUser user, String quality) throws InterruptedException {
+	private void selectSubscriberVideoQuality(Subscriber subscriber, String quality) throws InterruptedException {
+		OpenViduTestappUser user = subscriber.user();
 		if (!user.getDriver().findElements(By.cssSelector("app-info-dialog")).isEmpty()) {
 			user.getDriver().findElement(By.cssSelector("#close-dialog-btn")).click();
 			Thread.sleep(300);
 		}
-		user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 #max-video-quality")).click();
-		this.waitAndClick(user, "mat-option.mode-" + quality);
+		this.selectMatOption(user, subscriber.instanceSelector() + " #max-video-quality", quality);
 	}
 
 	/**
-	 * The subscriber-only participant of the given browser must receive the video
-	 * track published by the SDK participant: media actually flowing, with the
-	 * expected codec, with the layers the server reports in trackInfo. With more
-	 * than one layer the subscriber switches to the LOW and then to the HIGH
-	 * layer, each recognised by its frame width.
+	 * The subscriber-only participant must receive the video track published by
+	 * the SDK participant: media actually flowing, with the expected codec, with
+	 * the layers the server reports in trackInfo.
 	 */
-	private void assertSubscriberReceivesVideo(OpenViduTestappUser user, String sdk, String publisherIdentity,
+	private void assertSubscriberReceivesVideo(Subscriber subscriber, String sdk, String publisherIdentity,
 			String expectedCodec, TrackInfo trackInfo) throws Exception {
-		final String browser = browserName(user);
+		final OpenViduTestappUser user = subscriber.user();
+		final String name = subscriber.name();
 
-		user.getEventManager().waitUntilEventReaches("trackSubscribed", "ParticipantEvent", 1);
+		user.getEventManager().waitUntilEventReaches(subscriber.instance(), "trackSubscribed", "ParticipantEvent",
+				1);
 
-		user.getWaiter().until(ExpectedConditions.numberOfElementsToBe(By.tagName("video"), 1));
-		Assertions.assertTrue(assertAllElementsHaveTracks(user, "video", false, true),
-				browser + ": HTMLVideoElements were expected to have only one video track");
+		user.getWaiter().until(
+				ExpectedConditions.numberOfElementsToBe(By.cssSelector(subscriber.instanceSelector() + " video"), 1));
+		Assertions.assertTrue(assertAllElementsHaveTracks(user, subscriber.instanceSelector() + " video", false, true),
+				name + ": HTMLVideoElements were expected to have only one video track");
 
-		WebElement subscriberVideo = user.getDriver().findElement(By.cssSelector("#openvidu-instance-0 video.remote"));
+		WebElement subscriberVideo = subscriber.remoteVideo();
 
 		// Media must actually reach the subscriber (with the codec-binding bug
-		// present the track subscribes but receives 0 bytes forever)
+		// present the track subscribes but receives 0 bytes forever; a late
+		// subscriber additionally depends on the SFU requesting a keyframe)
 		waitUntilVideoLayersNotEmpty(user, subscriberVideo);
 		this.waitUntilSubscriberBytesReceivedIncreasing(user, subscriberVideo);
 		this.waitUntilSubscriberFramesPerSecondNotZero(user, subscriberVideo);
@@ -250,28 +283,44 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 		// And with the codec the publisher actually sends (a Producer bound to
 		// the wrong codec makes every subscriber negotiate that wrong codec)
 		Assertions.assertEquals(expectedCodec, this.getSubscriberVideoCodec(user, subscriberVideo),
-				browser + " subscriber should negotiate the codec the " + sdk + " SDK publisher sends");
+				name + " should negotiate the codec the " + sdk + " SDK publisher sends");
 
 		// And with the layers the server reports, in the track info received by
 		// the subscriber
-		JsonArray subscriberLayers = this.getRemoteVideoTrackInfoLayers(user, publisherIdentity);
+		JsonArray subscriberLayers = this.getRemoteVideoTrackInfoLayers(subscriber, publisherIdentity);
 		Assertions.assertEquals(trackInfo.getLayersCount(), subscriberLayers.size(),
 				"Expected " + trackInfo.getLayersCount() + " video layer(s) in the track published by the " + sdk
-						+ " SDK, but the " + browser + " subscriber sees " + subscriberLayers);
+						+ " SDK, but " + name + " sees " + subscriberLayers);
+	}
 
-		if (trackInfo.getLayersCount() > 1) {
-			// Multiple layers: with adaptiveStream disabled the received layer
-			// only changes through the max-video-quality selector. Receiving the
-			// LOW layer and then the HIGH layer — each recognised by the frame
-			// width the publisher declared for it in the TrackInfo, and each
-			// actually decoding (framesPerSecond > 0: an undecodable layer still
-			// reports its frame size) — proves that the publisher sends every
-			// layer and that the SFU forwards the requested one. The declared
-			// widths are reliable because the multi-layer publishers capture at
-			// 15 fps: at 30 fps libwebrtc's CPU adaptation can scale every layer
-			// down under load
-			this.selectQualityAndAwaitLayer(user, subscriberVideo, "LOW", lowestLayerWidth(trackInfo));
-			this.selectQualityAndAwaitLayer(user, subscriberVideo, "HIGH", highestLayerWidth(trackInfo));
+	/**
+	 * With more than one published layer, the given subscribers (all of them
+	 * receiving the track already) switch together to the LOW layer, then (with
+	 * three layers) to the MEDIUM one and then to the HIGH one, each subscriber
+	 * recognising each layer by its frame width. With adaptiveStream disabled the
+	 * received layer only changes through the max-video-quality selector, and
+	 * each layer must actually decode (framesPerSecond > 0: an undecodable layer
+	 * still reports its frame size): this proves that the publisher sends every
+	 * layer and that the SFU forwards the requested one, also the middle spatial
+	 * layer, which neither LOW nor HIGH can clamp to. The declared widths are
+	 * reliable because the multi-layer publishers capture at 15 fps: at 30 fps
+	 * libwebrtc's CPU adaptation can scale every layer down under load.
+	 */
+	private void assertSubscribersSwitchLayers(List<Subscriber> subscribers, TrackInfo trackInfo) throws Exception {
+		List<Integer> layerWidths = sortedLayerWidths(trackInfo);
+		if (layerWidths.size() < 2) {
+			return;
+		}
+		for (Subscriber subscriber : subscribers) {
+			this.selectQualityAndAwaitLayer(subscriber, "LOW", layerWidths.get(0));
+		}
+		if (layerWidths.size() > 2) {
+			for (Subscriber subscriber : subscribers) {
+				this.selectQualityAndAwaitLayer(subscriber, "MEDIUM", layerWidths.get(1));
+			}
+		}
+		for (Subscriber subscriber : subscribers) {
+			this.selectQualityAndAwaitLayer(subscriber, "HIGH", layerWidths.get(layerWidths.size() - 1));
 		}
 	}
 
@@ -281,10 +330,12 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 	 * (framesPerSecond > 0). Retries the selection once: under CPU load the SFU
 	 * can take longer than one wait window to ramp back up to a higher layer.
 	 */
-	private void selectQualityAndAwaitLayer(OpenViduTestappUser user, WebElement subscriberVideo, String quality,
-			int expectedFrameWidth) throws Exception {
+	private void selectQualityAndAwaitLayer(Subscriber subscriber, String quality, int expectedFrameWidth)
+			throws Exception {
+		OpenViduTestappUser user = subscriber.user();
+		WebElement subscriberVideo = subscriber.remoteVideo();
 		for (int attempt = 1; attempt <= 2; attempt++) {
-			this.selectSubscriberVideoQuality(user, quality);
+			this.selectSubscriberVideoQuality(subscriber, quality);
 			try {
 				this.waitUntilSubscriberFrameWidthIs(user, subscriberVideo, expectedFrameWidth);
 				break;
@@ -298,23 +349,15 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 	}
 
 	/**
-	 * Width of the lowest-quality published layer, from the server's TrackInfo.
-	 * The layers are picked by width, not by their VideoQuality label: the SDKs
-	 * label a two-layer publish inconsistently (simulcast: LOW + MEDIUM; SVC
-	 * L2T2: MEDIUM + HIGH; the Go program: LOW + HIGH), while the subscriber's
-	 * LOW/HIGH selection always clamps to the lowest/highest available layer.
+	 * Distinct widths of the published layers, lowest first, from the server's
+	 * TrackInfo. The layers are picked by width, not by their VideoQuality label:
+	 * the SDKs label a two-layer publish inconsistently (simulcast: LOW + MEDIUM;
+	 * SVC L2T2: MEDIUM + HIGH; the Go program: LOW + HIGH), while the
+	 * subscriber's LOW/HIGH selection always clamps to the lowest/highest
+	 * available layer and MEDIUM, only used with three layers, is the middle one.
 	 */
-	private int lowestLayerWidth(TrackInfo trackInfo) {
-		return trackInfo.getLayersList().stream().mapToInt(VideoLayer::getWidth).min()
-				.orElseThrow(() -> new AssertionError("No layers in " + trackInfo));
-	}
-
-	/**
-	 * Width of the highest-quality published layer, from the server's TrackInfo.
-	 */
-	private int highestLayerWidth(TrackInfo trackInfo) {
-		return trackInfo.getLayersList().stream().mapToInt(VideoLayer::getWidth).max()
-				.orElseThrow(() -> new AssertionError("No layers in " + trackInfo));
+	private List<Integer> sortedLayerWidths(TrackInfo trackInfo) {
+		return trackInfo.getLayersList().stream().map(VideoLayer::getWidth).distinct().sorted().toList();
 	}
 
 	/**
@@ -341,11 +384,11 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 	/**
 	 * Video layers (VideoLayer[] of the LiveKit TrackInfo) of the first video
 	 * track published by the remote participant with the given identity, as seen
-	 * by the local participant of the first testapp instance.
+	 * by the local participant of the subscriber's testapp instance.
 	 */
-	private JsonArray getRemoteVideoTrackInfoLayers(OpenViduTestappUser user, String participantIdentity) {
-		String layers = (String) ((JavascriptExecutor) user.getDriver()).executeScript(
-				"var room = window['room_0'];"
+	private JsonArray getRemoteVideoTrackInfoLayers(Subscriber subscriber, String participantIdentity) {
+		String layers = (String) ((JavascriptExecutor) subscriber.user().getDriver()).executeScript(
+				"var room = window['room_" + subscriber.instance() + "'];"
 						+ "var participant = room.remoteParticipants.get(arguments[0]);"
 						+ "var publication = participant.videoTrackPublications.values().next().value;"
 						+ "return JSON.stringify(publication.trackInfo.layers);",

@@ -1,26 +1,19 @@
-// Minimal LiveKit .NET RTC SDK publisher used by OpenViduTestAppE2eTest.
-// Joins the room of LIVEKIT_TOKEN and publishes a single video track with codec
-// VIDEO_CODEC (vp8, h264, vp9 or av1). VIDEO_LAYERS=single (default): one plain
-// RTP encoding (no simulcast for VP8/H264, no SVC = ScalabilityMode L1T1 for
-// VP9/AV1). VIDEO_LAYERS=multi: two layers, simulcast for VP8/H264 (the SDK
-// derives 480x360 + 640x480 from the 640x480 source) and SVC L2T2 for
-// VP9/AV1. Pushes synthetic animated frames forever (the Java test stops the
-// container).
-// Requires Livekit.Rtc.Dotnet >= 0.1.4 (TrackPublishOptions.VideoCodec).
-// Env: LIVEKIT_URL, LIVEKIT_TOKEN, VIDEO_CODEC, VIDEO_LAYERS
+// Minimal LiveKit .NET SDK publisher used by OpenViduTestAppE2eServerSdkTest.
+// See ../README.md
 using LiveKit.Rtc;
 using Proto = LiveKit.Proto;
 
 var codec = Environment.GetEnvironmentVariable("VIDEO_CODEC")!;
-var multiLayer = Environment.GetEnvironmentVariable("VIDEO_LAYERS") == "multi";
-int width = 640;
-int height = 480;
+var layers = int.Parse(Environment.GetEnvironmentVariable("VIDEO_LAYERS") ?? "1");
+// The SDK only splits a simulcast source in three layers from 960 px wide
+int width = layers == 3 ? 1280 : 640;
+int height = layers == 3 ? 720 : 480;
 
 var room = new Room();
 await room.ConnectAsync(
     Environment.GetEnvironmentVariable("LIVEKIT_URL")!,
     Environment.GetEnvironmentVariable("LIVEKIT_TOKEN")!,
-    new RoomOptions { AutoSubscribe = false });
+    new RoomOptions { AutoSubscribe = false, Dynacast = false });
 
 var videoSource = new VideoSource(width, height);
 var videoTrack = LocalVideoTrack.Create("dotnet-video", videoSource);
@@ -31,11 +24,11 @@ var options = new TrackPublishOptions
 };
 if (codec == "vp8" || codec == "h264")
 {
-    options.Simulcast = multiLayer;
+    options.Simulcast = layers > 1;
 }
 else
 {
-    options.ScalabilityMode = multiLayer ? "L2T2" : "L1T1";
+    options.ScalabilityMode = $"L{layers}T{layers}";
 }
 await room.LocalParticipant!.PublishTrackAsync(videoTrack, options);
 
@@ -55,6 +48,6 @@ while (true)
         data[i + 3] = 255;
     }
     videoSource.CaptureFrame(new VideoFrame(width, height, Proto.VideoBufferType.Rgba, data));
-    // 15 fps in multi mode: several software encoders at 30 fps trigger CPU adaptation
-    await Task.Delay(multiLayer ? 66 : 33);
+    // 15 fps with several layers: several software encoders at 30 fps trigger CPU adaptation
+    await Task.Delay(layers > 1 ? 66 : 33);
 }

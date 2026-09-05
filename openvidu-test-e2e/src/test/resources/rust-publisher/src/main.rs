@@ -1,12 +1,5 @@
-// Minimal LiveKit Rust SDK publisher used by OpenViduTestAppE2eTest.
-// Joins the room of LIVEKIT_TOKEN and publishes a single video track with codec
-// VIDEO_CODEC (vp8, h264, vp9 or av1). VIDEO_LAYERS=single (default): one plain
-// RTP encoding (no simulcast for VP8/H264, no SVC = scalability_mode L1T1 for
-// VP9/AV1). VIDEO_LAYERS=multi: two layers, simulcast for VP8/H264 (the SDK
-// derives 480x360 + 640x480 from the 640x480 source) and SVC L2T2 for
-// VP9/AV1. Pushes synthetic animated frames forever (the Java test stops the
-// container).
-// Env: LIVEKIT_URL, LIVEKIT_TOKEN, VIDEO_CODEC, VIDEO_LAYERS
+// Minimal LiveKit Rust SDK publisher used by OpenViduTestAppE2eServerSdkTest
+// See ../README.md
 use std::{env, time::Duration};
 
 use livekit::options::{TrackPublishOptions, VideoCodec};
@@ -18,8 +11,9 @@ use livekit::{Room, RoomOptions};
 #[tokio::main]
 async fn main() {
     let codec = env::var("VIDEO_CODEC").unwrap();
-    let multi_layer = env::var("VIDEO_LAYERS").map(|v| v == "multi").unwrap_or(false);
-    let (width, height): (u32, u32) = (640, 480);
+    let layers: u32 = env::var("VIDEO_LAYERS").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    // The SDK only splits a simulcast source in three layers from 960 px wide
+    let (width, height): (u32, u32) = if layers == 3 { (1280, 720) } else { (640, 480) };
 
     let mut options = TrackPublishOptions {
         source: TrackSource::Camera,
@@ -33,15 +27,18 @@ async fn main() {
         ..Default::default()
     };
     if codec == "vp8" || codec == "h264" {
-        options.simulcast = multi_layer;
+        options.simulcast = layers > 1;
     } else {
-        options.scalability_mode = Some(if multi_layer { "L2T2" } else { "L1T1" }.to_string());
+        options.scalability_mode = Some(format!("L{layers}T{layers}"));
     }
 
+    // RoomOptions is #[non_exhaustive]: it cannot be built with a struct expression
+    let mut room_options = RoomOptions::default();
+    room_options.dynacast = false;
     let (room, mut _events) = Room::connect(
         &env::var("LIVEKIT_URL").unwrap(),
         &env::var("LIVEKIT_TOKEN").unwrap(),
-        RoomOptions::default(),
+        room_options,
     )
     .await
     .expect("could not connect to room");
@@ -73,7 +70,7 @@ async fn main() {
         data_u.fill(255 - n);
         data_v.fill(n.wrapping_mul(3));
         source.capture_frame(&frame);
-        // 15 fps in multi mode: several software encoders at 30 fps trigger CPU adaptation
-        tokio::time::sleep(Duration::from_millis(if multi_layer { 66 } else { 33 })).await;
+        // 15 fps with several layers: several software encoders at 30 fps trigger CPU adaptation
+        tokio::time::sleep(Duration::from_millis(if layers > 1 { 66 } else { 33 })).await;
     }
 }

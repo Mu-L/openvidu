@@ -44,7 +44,7 @@
       <mat-form-field id="max-video-quality" class="video-btn quality-option"  matTooltip="Set video quality" matTooltipClass="custom-tooltip">
         <mat-select [(value)]="maxVideoQuality" (selectionChange)="onQualityChange()">
           @for (q of ['LOW', 'MEDIUM', 'HIGH']; track q) {
-            <mat-option [value]="q" [ngClass]="'mode-' + q">{{q}}</mat-option>
+            <mat-option [value]="q" [id]="'mat-option-' + q" [ngClass]="'mode-' + q">{{q}}</mat-option>
           }
         </mat-select>
       </mat-form-field>
