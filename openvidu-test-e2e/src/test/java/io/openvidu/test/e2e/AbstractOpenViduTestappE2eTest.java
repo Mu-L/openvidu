@@ -273,11 +273,19 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 
 	protected void waitUntilSubscriberFrameWidthIs(OpenViduTestappUser user, WebElement videoElement,
 			final int expectedFrameWidth) {
+		final JsonObject[] lastLayer = { new JsonObject() };
 		this.waitUntilAux(user, videoElement, () -> {
 			JsonObject layer = this.getSubscriberVideoLayer(user, videoElement);
+			lastLayer[0] = layer;
 			long frameWidth = this.getLayerCounter(layer, "frameWidth");
 			return isStatPresent(frameWidth) && frameWidth == expectedFrameWidth;
-		}, "Timeout waiting for video track to have a frameWidth of " + expectedFrameWidth);
+		}, () -> "Timeout waiting for video track to have a frameWidth of " + expectedFrameWidth
+				+ ". Last observed: frameWidth=" + describeStat(getLayerCounter(lastLayer[0], "frameWidth"))
+				+ " frameHeight=" + describeStat(getLayerCounter(lastLayer[0], "frameHeight")) + " framesPerSecond="
+				+ describeStat(getLayerCounter(lastLayer[0], "framesPerSecond")) + " framesDecoded="
+				+ describeStat(getLayerCounter(lastLayer[0], "framesDecoded")) + " keyFramesDecoded="
+				+ describeStat(getLayerCounter(lastLayer[0], "keyFramesDecoded")) + " bytesReceived="
+				+ describeStat(getLayerCounter(lastLayer[0], "bytesReceived")));
 	}
 
 	protected void waitUntilSubscriberFrameHeightIs(OpenViduTestappUser user, WebElement videoElement,

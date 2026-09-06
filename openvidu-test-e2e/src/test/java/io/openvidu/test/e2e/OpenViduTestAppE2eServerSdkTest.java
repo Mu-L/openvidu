@@ -326,8 +326,12 @@ public class OpenViduTestAppE2eServerSdkTest extends AbstractOpenViduTestappE2eT
 	 * still reports its frame size): this proves that the publisher sends every
 	 * layer and that the SFU forwards the requested one, also the middle spatial
 	 * layer, which neither LOW nor HIGH can clamp to. The declared widths are
-	 * reliable because the multi-layer publishers capture at 15 fps: at 30 fps
-	 * libwebrtc's CPU adaptation can scale every layer down under load.
+	 * reliable because the FFI publishers publish with degradation preference
+	 * MAINTAIN_RESOLUTION and capture at 15 fps: with the SDKs' default
+	 * (MAINTAIN_FRAMERATE) libwebrtc scales the source down under CPU load
+	 * (1280x720 to 960x540 and 640x360, dropping the smallest simulcast layer),
+	 * so on loaded CI runners the SFU forwarded the requested layer but its frames
+	 * never had the declared width.
 	 */
 	private void assertSubscribersSwitchLayers(List<Subscriber> subscribers, TrackInfo trackInfo) throws Exception {
 		List<Integer> layerWidths = sortedLayerWidths(trackInfo);

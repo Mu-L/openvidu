@@ -27,6 +27,9 @@ const track = LocalVideoTrack.createVideoTrack('node-video', source);
 const options = new TrackPublishOptions({
   videoCodec: VideoCodec[codec.toUpperCase()],
   source: TrackSource.SOURCE_CAMERA,
+  // DegradationPreference.MAINTAIN_RESOLUTION (enum of @livekit/rtc-ffi-bindings,
+  // not re-exported by @livekit/rtc-node): keep the layer sizes under CPU load
+  degradationPreference: 2,
 });
 if (codec === 'vp8' || codec === 'h264') {
   options.simulcast = layers > 1;

@@ -3491,6 +3491,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	}
 
 	@Test
+	@OnlyMediasoup // Pion seems to freeze sometimes on its own
 	@DisplayName("SVC VP9 (L3T3) subscriber keeps playing when the publisher drops its top layer")
 	void svcVP9L3T3PublisherDropsTopLayerNoFreezeTest() throws Exception {
 		// TEST FOR ISSUE:

@@ -21,6 +21,8 @@ var options = new TrackPublishOptions
 {
     VideoCodec = Enum.Parse<Proto.VideoCodec>(codec, ignoreCase: true),
     Source = Proto.TrackSource.SourceCamera,
+    // Keep the layer sizes under CPU load (see ../README.md)
+    DegradationPreference = Proto.DegradationPreference.MaintainResolution,
 };
 if (codec == "vp8" || codec == "h264")
 {
@@ -36,16 +38,21 @@ await room.LocalParticipant!.PublishTrackAsync(videoTrack, options);
 Console.WriteLine("TRACK_PUBLISHED");
 
 var data = new byte[width * height * 4];
-byte n = 0;
+int n = 0;
 while (true)
 {
-    n += 7;
-    for (int i = 0; i < data.Length; i += 4)
+    n++;
+    // Textured, moving frames (see ../README.md)
+    for (int y = 0; y < height; y++)
     {
-        data[i] = n;
-        data[i + 1] = (byte)(255 - n);
-        data[i + 2] = (byte)(n * 3);
-        data[i + 3] = 255;
+        for (int x = 0; x < width; x++)
+        {
+            int i = (y * width + x) * 4;
+            data[i] = (byte)(x + 7 * n);
+            data[i + 1] = (byte)(y + 3 * n);
+            data[i + 2] = (byte)(x + y + 11 * n);
+            data[i + 3] = 255;
+        }
     }
     videoSource.CaptureFrame(new VideoFrame(width, height, Proto.VideoBufferType.Rgba, data));
     // 15 fps with several layers: several software encoders at 30 fps trigger CPU adaptation

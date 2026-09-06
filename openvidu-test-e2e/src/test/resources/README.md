@@ -33,11 +33,27 @@ or `av1`) and `VIDEO_LAYERS` layers (`1`, `2` or `3`):
 ### FFI-based SDKs (node, python, rust, dotnet)
 
 They encode raw frames themselves and push synthetic animated frames forever.
+The frames are textured and moving (per-pixel gradients shifted every frame),
+not flat colours: a flat frame compresses to a few hundred bytes, so the
+simulcast / SVC layers ran at about 10 kbps with one RTP packet per frame, and
+under CPU load (fewer frames per second) the SFU's stream tracker declared the
+upper layers gone for lack of packets, leaving subscribers on the lowest layer.
+Textured frames give every layer a realistic bitrate and steady packet flow.
 The source is 640x480 for one or two layers and 1280x720 for three layers,
 because the SDKs only split a simulcast source in three layers from 960 px
 wide. The SDKs derive the simulcast layers from the source: 480x360 + 640x480
 from the 640x480 source (4:3 presets) and 320x180 + 640x360 + 1280x720 from the
 1280x720 one (16:9 presets).
+
+They publish with degradation preference `MAINTAIN_RESOLUTION`. The SDKs'
+default for camera tracks is `MAINTAIN_FRAMERATE`, which lets libwebrtc scale
+the source down under CPU overuse or bitrate pressure (1280x720 becomes
+960x540, and every layer shrinks with it): the Java test identifies each layer
+by its declared frame width, so on a loaded machine (GitHub-hosted runners) the
+expected widths were never observed. With `MAINTAIN_RESOLUTION` libwebrtc drops
+frames instead and the layer sizes stay as declared. They also capture at 15 fps
+with several layers, because three software encoders at 30 fps trigger that
+adaptation even faster.
 
 ### Go SDK
 

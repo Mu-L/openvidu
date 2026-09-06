@@ -2,7 +2,7 @@
 // See ../README.md
 use std::{env, time::Duration};
 
-use livekit::options::{TrackPublishOptions, VideoCodec};
+use livekit::options::{DegradationPreference, TrackPublishOptions, VideoCodec};
 use livekit::track::{LocalTrack, LocalVideoTrack, TrackSource};
 use livekit::webrtc::video_frame::{I420Buffer, VideoFrame, VideoRotation};
 use livekit::webrtc::video_source::{native::NativeVideoSource, RtcVideoSource, VideoResolution};
@@ -17,6 +17,8 @@ async fn main() {
 
     let mut options = TrackPublishOptions {
         source: TrackSource::Camera,
+        // Keep the layer sizes under CPU load (see ../README.md)
+        degradation_preference: Some(DegradationPreference::MaintainResolution),
         video_codec: match codec.as_str() {
             "vp8" => VideoCodec::VP8,
             "h264" => VideoCodec::H264,
@@ -62,13 +64,24 @@ async fn main() {
         frame_metadata: None,
         buffer: I420Buffer::new(width, height),
     };
-    let mut n: u8 = 0;
+    let (stride_y, stride_u, stride_v) = frame.buffer.strides();
+    let mut n: u32 = 0;
     loop {
-        n = n.wrapping_add(7);
+        n += 1;
+        // Textured, moving frames (see ../README.md): a diagonal ramp on the luma
+        // plane and slower ramps on chroma
         let (data_y, data_u, data_v) = frame.buffer.data_mut();
-        data_y.fill(n);
-        data_u.fill(255 - n);
-        data_v.fill(n.wrapping_mul(3));
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                data_y[y * stride_y as usize + x] = (x + y + 7 * n as usize) as u8;
+            }
+        }
+        for y in 0..(height as usize + 1) / 2 {
+            for x in 0..(width as usize + 1) / 2 {
+                data_u[y * stride_u as usize + x] = (x + 3 * n as usize) as u8;
+                data_v[y * stride_v as usize + x] = (y + 5 * n as usize) as u8;
+            }
+        }
         source.capture_frame(&frame);
         // 15 fps with several layers: several software encoders at 30 fps trigger CPU adaptation
         tokio::time::sleep(Duration::from_millis(if layers > 1 { 66 } else { 33 })).await;
