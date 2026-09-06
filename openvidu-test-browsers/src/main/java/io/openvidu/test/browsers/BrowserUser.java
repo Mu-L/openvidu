@@ -27,7 +27,9 @@ import java.util.Map;
 import org.openqa.selenium.Dimension;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebDriverException;
 import org.openqa.selenium.WebElement;
+import org.openqa.selenium.remote.RemoteWebDriver;
 import org.openqa.selenium.support.ui.ExpectedCondition;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.slf4j.LoggerFactory;
@@ -68,6 +70,23 @@ public class BrowserUser {
 
 	protected void configureDriver() {
 		this.waiter = new WebDriverWait(this.driver, Duration.ofSeconds(timeOfWaitInSeconds));
+		try {
+			// Bound page loads to the user's wait time.
+			this.driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(timeOfWaitInSeconds));
+		} catch (WebDriverException e) {
+			log.warn("Could not set the page load timeout on this driver: {}", e.getMessage());
+		}
+	}
+
+	/**
+	 * Logs the id of the remote session just created. This helps differentiate
+	 * between a hang in the Grid and a hang in the page load.
+	 */
+	protected void logRemoteSessionCreated(String browser) {
+		if (this.driver instanceof RemoteWebDriver) {
+			log.info("Remote WebDriver session created [browser: {}, sessionId: {}]", browser,
+					((RemoteWebDriver) this.driver).getSessionId());
+		}
 	}
 
 	protected void configureDriver(Dimension windowDimensions) {

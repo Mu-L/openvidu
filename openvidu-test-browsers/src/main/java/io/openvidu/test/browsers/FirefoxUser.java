@@ -61,6 +61,7 @@ public class FirefoxUser extends BrowserUser {
 			log.info("Using URL {} to connect to remote web driver", REMOTE_URL);
 			try {
 				this.driver = new RemoteWebDriver(new URL(REMOTE_URL), options);
+				logRemoteSessionCreated("firefox");
 			} catch (MalformedURLException e) {
 				e.printStackTrace();
 			}

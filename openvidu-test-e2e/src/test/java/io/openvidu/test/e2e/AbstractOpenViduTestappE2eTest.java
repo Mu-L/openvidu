@@ -1,9 +1,14 @@
 package io.openvidu.test.e2e;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.AfterEach;
@@ -29,14 +34,15 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 	protected Collection<OpenViduTestappUser> testappUsers = new HashSet<>();
 
 	private void connectToOpenViduTestApp(OpenViduTestappUser user) {
-		user.getDriver().get(APP_URL);
 		try {
+			user.getDriver().get(APP_URL);
 			user.getWaiter().until(ExpectedConditions.presenceOfElementLocated(By.id("livekit-url")));
 		} catch (TimeoutException e) {
 			// Dump diagnostics and retry once with a reload before giving up
 			String screenshot = "data:image/png;base64,"
 					+ ((TakesScreenshot) user.getDriver()).getScreenshotAs(BASE64);
-			System.out.println("TIMEOUT WAITING FOR " + APP_URL + " TO LOAD, RETRYING ONCE. Page source:");
+			System.out.println("TIMEOUT WAITING FOR " + APP_URL + " TO LOAD (" + firstLine(e.getMessage())
+					+ "), RETRYING ONCE. Page source:");
 			System.out.println(user.getDriver().getPageSource());
 			System.out.println(screenshot);
 			user.getDriver().get(APP_URL);
@@ -52,6 +58,57 @@ public class AbstractOpenViduTestappE2eTest extends OpenViduTestE2e {
 		secretInput.clear();
 		secretInput.sendKeys(LIVEKIT_API_SECRET);
 		user.getEventManager().startPolling();
+	}
+
+	private static String firstLine(String message) {
+		if (message == null) {
+			return "";
+		}
+		int eol = message.indexOf('\n');
+		return eol == -1 ? message : message.substring(0, eol);
+	}
+
+	/**
+	 * Waits for every browser task of a parallel-browser test and, if any failed,
+	 * fails the test reporting all the failures.
+	 */
+	protected void awaitBrowserTasks(Future<?>... tasks) {
+		final int capSeconds = 300;
+		List<Throwable> failures = new ArrayList<>();
+		for (int i = 0; i < tasks.length; i++) {
+			try {
+				tasks[i].get(capSeconds, TimeUnit.SECONDS);
+			} catch (ExecutionException e) {
+				Throwable cause = e.getCause() != null ? e.getCause() : e;
+				log.error("Browser task {} of {} failed", i + 1, tasks.length, cause);
+				failures.add(cause);
+			} catch (java.util.concurrent.TimeoutException e) {
+				tasks[i].cancel(true);
+				AssertionError stuck = new AssertionError("Browser task " + (i + 1) + " of " + tasks.length
+						+ " did not finish within " + capSeconds + " s and was cancelled");
+				log.error("Browser task {} of {} did not finish within {} s, cancelling it", i + 1, tasks.length,
+						capSeconds);
+				failures.add(stuck);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new RuntimeException("Interrupted while waiting for the browser tasks", e);
+			}
+		}
+		if (!failures.isEmpty()) {
+			StringBuilder message = new StringBuilder("Error while running browsers in parallel: ")
+					.append(failures.size()).append(" of ").append(tasks.length).append(" browser task(s) failed");
+			for (Throwable failure : failures) {
+				message.append("\n  - ").append(failure.getClass().getSimpleName()).append(": ")
+						.append(firstLine(failure.getMessage()));
+			}
+			// The first failure is the cause; the others travel as suppressed exceptions so
+			// that every stack trace ends up in the surefire report as well
+			Throwable first = failures.get(0);
+			for (int i = 1; i < failures.size(); i++) {
+				first.addSuppressed(failures.get(i));
+			}
+			Assertions.fail(message.toString(), first);
+		}
 	}
 
 	protected OpenViduTestappUser setupBrowserAndConnectToOpenViduTestapp(String browser) throws Exception {

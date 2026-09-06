@@ -720,7 +720,9 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 	 * Run the given tasks concurrently (one thread each), wait for all to finish,
 	 * then propagate the first failure — AssertionError or any exception — to the
 	 * caller's thread, so assertions inside the tasks actually fail the test (an
-	 * AssertionError thrown in a worker thread would otherwise be lost). Each task
+	 * AssertionError thrown in a worker thread would otherwise be lost). Every
+	 * failure is logged and the ones after the first travel as suppressed exceptions
+	 * of the propagated one, so no browser's error is masked by another's. Each task
 	 * MUST drive a distinct WebDriver, since a Selenium driver is not thread-safe.
 	 */
 	private void runInParallel(ThrowingRunnable... tasks) throws Exception {
@@ -733,19 +735,30 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 					return null;
 				});
 			}
+			List<Throwable> failures = new ArrayList<>();
+			int index = 0;
 			for (Future<Void> future : executor.invokeAll(callables)) {
+				index++;
 				try {
 					future.get();
 				} catch (ExecutionException e) {
 					Throwable cause = e.getCause() != null ? e.getCause() : e;
-					if (cause instanceof Error) {
-						throw (Error) cause;
-					}
-					if (cause instanceof Exception) {
-						throw (Exception) cause;
-					}
-					throw new RuntimeException(cause);
+					log.error("Parallel task {} of {} failed", index, tasks.length, cause);
+					failures.add(cause);
 				}
+			}
+			if (!failures.isEmpty()) {
+				Throwable cause = failures.get(0);
+				for (int i = 1; i < failures.size(); i++) {
+					cause.addSuppressed(failures.get(i));
+				}
+				if (cause instanceof Error) {
+					throw (Error) cause;
+				}
+				if (cause instanceof Exception) {
+					throw (Exception) cause;
+				}
+				throw new RuntimeException(cause);
 			}
 		} finally {
 			executor.shutdownNow();
@@ -2180,12 +2193,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			}
 		});
 
-		try {
-			task1.get();
-			task2.get();
-		} catch (ExecutionException ex) {
-			Assertions.fail("Error while running browsers in parallel", ex);
-		}
+		awaitBrowserTasks(task1, task2);
 	}
 
 	@Test
@@ -2342,12 +2350,7 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 			}
 		});
 
-		try {
-			task1.get();
-			task2.get();
-		} catch (ExecutionException ex) {
-			Assertions.fail("Error while running browsers in parallel", ex);
-		}
+		awaitBrowserTasks(task1, task2);
 
 		long pub = publisher1920AtMs.get();
 		long sub = subscriber1920AtMs.get();
