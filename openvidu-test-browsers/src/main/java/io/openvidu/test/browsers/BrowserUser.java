@@ -18,14 +18,25 @@
 package io.openvidu.test.browsers;
 
 import java.awt.Point;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.ConnectException;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.channels.ClosedChannelException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
+import org.openqa.selenium.Capabilities;
 import org.openqa.selenium.Dimension;
 import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.SessionNotCreatedException;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebDriverException;
 import org.openqa.selenium.WebElement;
@@ -75,6 +86,106 @@ public class BrowserUser {
 			this.driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(timeOfWaitInSeconds));
 		} catch (WebDriverException e) {
 			log.warn("Could not set the page load timeout on this driver: {}", e.getMessage());
+		}
+	}
+
+	/**
+	 * How long a remote WebDriver endpoint may take to report itself ready before
+	 * the browser setup gives up with an explicit error.
+	 */
+	private static final Duration REMOTE_READY_TIMEOUT = Duration.ofSeconds(60);
+
+	private static final Pattern REMOTE_READY = Pattern.compile("\"ready\"\\s*:\\s*true");
+
+	/**
+	 * Creates the remote session once the endpoint reports ready, retrying once if
+	 * the first attempt dies on a connection error.
+	 */
+	protected static RemoteWebDriver newRemoteWebDriver(URL remoteUrl, Capabilities capabilities, String browser) {
+		waitForRemoteWebDriverReady(remoteUrl, browser);
+		try {
+			return new RemoteWebDriver(remoteUrl, capabilities);
+		} catch (SessionNotCreatedException e) {
+			Throwable connectionError = connectionErrorOf(e);
+			if (connectionError == null) {
+				throw e;
+			}
+			log.warn("Creating the remote {} session at {} failed on a connection error ({}: {}), retrying once",
+					browser, remoteUrl, connectionError.getClass().getSimpleName(), connectionError.getMessage());
+			sleepQuietly(Duration.ofSeconds(4));
+			waitForRemoteWebDriverReady(remoteUrl, browser);
+			return new RemoteWebDriver(remoteUrl, capabilities);
+		}
+	}
+
+	/**
+	 * Polls the endpoint's {@code status} resource until it answers HTTP 200 with
+	 * {@code "ready": true}, or fails after {@link #REMOTE_READY_TIMEOUT} quoting
+	 * the last answer.
+	 */
+	protected static void waitForRemoteWebDriverReady(URL remoteUrl, String browser) {
+		String base = remoteUrl.toString();
+		String statusUrl = base.endsWith("/") ? base + "status" : base + "/status";
+		Instant start = Instant.now();
+		Instant deadline = start.plus(REMOTE_READY_TIMEOUT);
+		String lastAnswer = "no answer yet";
+		while (true) {
+			try {
+				HttpURLConnection connection = (HttpURLConnection) new URL(statusUrl).openConnection();
+				connection.setConnectTimeout(2000);
+				connection.setReadTimeout(2000);
+				int code = connection.getResponseCode();
+				String body = readBody(connection, code);
+				if (code == 200 && REMOTE_READY.matcher(body).find()) {
+					long waitedMs = Duration.between(start, Instant.now()).toMillis();
+					if (waitedMs > 1000) {
+						log.info("Remote {} WebDriver endpoint {} became ready after {} ms", browser, statusUrl,
+								waitedMs);
+					}
+					return;
+				}
+				lastAnswer = "HTTP " + code + " " + body.replaceAll("\\s+", " ").trim();
+			} catch (IOException e) {
+				lastAnswer = e.getClass().getSimpleName() + ": " + e.getMessage();
+			}
+			if (Instant.now().isAfter(deadline)) {
+				throw new IllegalStateException("Remote " + browser + " WebDriver endpoint " + statusUrl
+						+ " did not report ready within " + REMOTE_READY_TIMEOUT.toSeconds() + " s (last answer: "
+						+ lastAnswer + ")");
+			}
+			sleepQuietly(Duration.ofMillis(250));
+		}
+	}
+
+	private static String readBody(HttpURLConnection connection, int code) throws IOException {
+		try (InputStream in = code >= 400 ? connection.getErrorStream() : connection.getInputStream()) {
+			if (in == null) {
+				return "";
+			}
+			byte[] bytes = in.readNBytes(4096);
+			return new String(bytes, StandardCharsets.UTF_8);
+		}
+	}
+
+	/**
+	 * The connection-level cause of a failed session creation
+	 */
+	private static Throwable connectionErrorOf(Throwable error) {
+		for (Throwable t = error; t != null; t = t.getCause()) {
+			String name = t.getClass().getSimpleName();
+			if (t instanceof ConnectException || t instanceof ClosedChannelException
+					|| "ConnectionException".equals(name) || "HttpConnectTimeoutException".equals(name)) {
+				return t;
+			}
+		}
+		return null;
+	}
+
+	private static void sleepQuietly(Duration duration) {
+		try {
+			Thread.sleep(duration.toMillis());
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 		}
 	}
 
