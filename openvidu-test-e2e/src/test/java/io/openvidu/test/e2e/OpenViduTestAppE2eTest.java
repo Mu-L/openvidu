@@ -1011,9 +1011,10 @@ public class OpenViduTestAppE2eTest extends AbstractOpenViduTestappE2eTest {
 		regularUser.getEventManager().clearAllCurrentEvents();
 
 		if (outboundPacketLoss != null) {
-			// Drop packets the client sends through the publisher PC
-			NetworkConditioner.applyLossToOutboundPackets(getNetemContainerName(punchbagUser), publisherPortInSfu,
-					outboundPacketLoss, 10000);
+			// Drop packets the client sends through the publisher PC. The SFU's ICE-TCP
+			// port is impaired alike to avoid TCP fallbacks from the client side
+			NetworkConditioner.applyLossToOutboundPackets(getNetemContainerName(punchbagUser),
+					publisherPortInSfu + "," + NetworkConditioner.SFU_ICE_TCP_PORT, outboundPacketLoss, 10000);
 		}
 		if (inboundPacketLoss != null) {
 			// Drop packets the client receives through the subscriber PC (or publisher PC

@@ -17,6 +17,14 @@ public class NetworkConditioner {
 
 	private static final String PUMBA_IMAGE = "gaiaadm/pumba:1.2.1";
 	private static final String NETTOOLS_IMAGE = "ghcr.io/alexei-led/pumba-alpine-nettools:sha-19e0a46";
+
+	/**
+	 * TCP port of the SFU's ICE-TCP candidates (livekit.yaml {@code rtc.tcp_port}).
+	 * Every OUTBOUND impairment meant to cut a publisher's media must cover it too.
+	 * (clients can reconnect to this port with an ICE restart when the UDP media
+	 * path is dead).
+	 */
+	public static final String SFU_ICE_TCP_PORT = "7881";
 	private static final String DOCKER_SOCK = "/var/run/docker.sock";
 
 	// Where Pumba installs the netem qdisc of a port-scoped netem impairment. Pumba
@@ -217,17 +225,24 @@ public class NetworkConditioner {
 	 * unlike a flaky 100-filter netem
 	 *
 	 * Stops the running Pumba first (avoids conflicting root qdiscs), then installs
-	 * a SINGLE iptables OUTPUT DROP rule over the whole {@code mediaPortRange}
-	 * (e.g. "7900-7999").
+	 * an iptables OUTPUT DROP rule over the whole UDP {@code mediaPortRange} (e.g.
+	 * "7900-7999") plus one over the SFU's ICE-TCP port
+	 * ({@link #SFU_ICE_TCP_PORT}), so the browser's reconnect cannot fail over to
+	 * TCP and escape the blackout.
 	 */
 	public static void blackoutOutbound(String targetContainer, String mediaPortRange, int durationSec) {
 		clear();
 		final String iptablesRange = mediaPortRange.replace('-', ':'); // iptables ranges are low:high
-		log.info("Total OUTBOUND blackout (100% loss) on container {} across SFU media port range {} "
-				+ "(single iptables OUTPUT DROP)", targetContainer, mediaPortRange);
+		log.info("Total OUTBOUND blackout (100% loss) on container {} across SFU media port range {} and "
+				+ "ICE-TCP port {} (iptables OUTPUT DROP)", targetContainer, mediaPortRange, SFU_ICE_TCP_PORT);
 		String out = nettools(targetContainer, "iptables",
 				"-A OUTPUT -o eth0 -p udp --dport " + iptablesRange + " -j DROP");
-		log.info("blackout iptables -A OUTPUT result: {}", out);
+		log.info("blackout iptables -A OUTPUT (udp {}) result: {}", iptablesRange, out);
+		// clear() flushes the whole OUTPUT chain, so this rule goes away with the other
+		// one
+		String outTcp = nettools(targetContainer, "iptables",
+				"-A OUTPUT -o eth0 -p tcp --dport " + SFU_ICE_TCP_PORT + " -j DROP");
+		log.info("blackout iptables -A OUTPUT (tcp {}) result: {}", SFU_ICE_TCP_PORT, outTcp);
 		blackoutContainer = targetContainer;
 	}
 
